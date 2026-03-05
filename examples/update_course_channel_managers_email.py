@@ -12,12 +12,16 @@ against the CURSUS column in kanaal_emails.csv.  When a match is found the
 channel's managers_email is set to the corresponding E_MAIL_ADRES and the
 "Use default value" flag is disabled.
 
+A report is written to a text file showing, for every course channel, the
+old managers_email and what it was changed to (or that no CSV match was found).
+
 NOTE: The exact API field name for the "Use default value" toggle may differ
 from 'managers_email_is_default' depending on your MediaServer version.
 Inspect the channels/edit/ API docs or a browser network trace to confirm.
 '''
 import argparse
 import csv
+import datetime
 import os
 import sys
 
@@ -40,6 +44,12 @@ if __name__ == '__main__':
         '--csv',
         default='kanaal_emails.csv',
         help='Path to the kanaal_emails CSV file.',
+        type=str,
+    )
+    parser.add_argument(
+        '--report',
+        default='update_managers_email_report.txt',
+        help='Path to the output report text file.',
         type=str,
     )
     parser.add_argument(
@@ -88,8 +98,9 @@ if __name__ == '__main__':
     print()
 
     # -------------------------------------------------------------------------
-    # Match each course channel against the CSV and update
+    # Match each course channel against the CSV, update, and collect report rows
     # -------------------------------------------------------------------------
+    report_lines = []
     matched = 0
     unmatched = 0
 
@@ -99,14 +110,24 @@ if __name__ == '__main__':
         words = title.split()
         course_code = words[0] if words else ''
 
+        # Fetch the current managers_email from the API
+        try:
+            info = msc.api('channels/get/', params={'oid': oid, 'full': 'yes'})['info']
+            old_email = info.get('managers_email') or '(none)'
+        except Exception as e:
+            old_email = f'(error fetching: {e})'
+
         if not course_code:
-            print(f'SKIP (empty title): oid={oid}')
+            line = f'[SKIP]     oid={oid} | title=(empty) | old={old_email} | No course code in title'
+            print(line)
+            report_lines.append(line)
             unmatched += 1
             continue
 
         if course_code in cursus_email:
-            email = cursus_email[course_code]
-            print(f'MATCH  [{course_code}] "{title}"  ->  {email}  (oid={oid})')
+            new_email = cursus_email[course_code]
+            status = 'UPDATED'
+            error = None
             if not args.dry_run:
                 try:
                     msc.api(
@@ -114,24 +135,52 @@ if __name__ == '__main__':
                         method='post',
                         data={
                             'oid': oid,
-                            'managers_email': email,
+                            'managers_email': new_email,
                             # Disable "Use default value" for managers_email.
                             # Adjust field name below if the API uses a different key.
                             'managers_email_is_default': 'false',
                         },
                     )
-                    print(f'       Updated successfully.')
                 except Exception as e:
-                    print(f'       ERROR: {e}')
+                    status = 'ERROR'
+                    error = str(e)
+
+            if error:
+                line = f'[ERROR]    oid={oid} | code={course_code} | "{title}" | old={old_email} | new={new_email} | {error}'
+            else:
+                line = f'[{status}]  oid={oid} | code={course_code} | "{title}" | old={old_email} | new={new_email}'
+            print(line)
+            report_lines.append(line)
             matched += 1
         else:
-            print(f'NO MATCH [{course_code}] "{title}"  (oid={oid})')
+            line = f'[NO MATCH] oid={oid} | code={course_code} | "{title}" | old={old_email} | not found in CSV'
+            print(line)
+            report_lines.append(line)
             unmatched += 1
 
     # -------------------------------------------------------------------------
-    # Summary
+    # Write report file
     # -------------------------------------------------------------------------
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    dry_run_note = '  *** DRY RUN — no changes were made ***' if args.dry_run else ''
+    header = (
+        f'managers_email update report\n'
+        f'Generated : {timestamp}{dry_run_note}\n'
+        f'CSV source: {args.csv}\n'
+        f'Faculty channels (level 1): {len(top_level_oids)}\n'
+        f'Course channels  (level 2): {len(course_channels)}\n'
+        f'Matched / updated : {matched}\n'
+        f'No CSV match      : {unmatched}\n'
+        f'{"=" * 80}\n'
+    )
+
+    with open(args.report, 'w', encoding='utf-8') as f:
+        f.write(header)
+        f.write('\n'.join(report_lines))
+        f.write('\n')
+
     print()
     print(f'Done: {matched} channel(s) matched, {unmatched} channel(s) unmatched.')
+    print(f'Report written to: {args.report}')
     if args.dry_run:
         print('(dry run — no changes were made)')
