@@ -163,6 +163,7 @@ if __name__ == '__main__':
             })
             matched += 1
         else:
+            # No match: record in report only, do not print to terminal
             report_rows.append({
                 'Match': 'no',
                 'oid': oid,
