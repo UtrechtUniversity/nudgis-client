@@ -15,9 +15,10 @@ channel's managers_emails is set to the corresponding E_MAIL_ADRES and the
 A report is written to a CSV file showing, for every course channel, the
 old managers_emails and what it was changed to (or that no CSV match was found).
 
-NOTE: The exact API field name for the "Use default value" toggle may differ
-from 'managers_emails_is_default' depending on your MediaServer version.
-Inspect the channels/edit/ API docs or a browser network trace to confirm.
+Two API calls are made per matched channel:
+  1. channels/edit/                      — sets managers_emails (channel-specific value)
+  2. settings/defaults/publishing/edit/  — sets channel_managers_emails (the default value)
+                                           and unchecks "Use default" by omitting the _null flag
 '''
 import argparse
 import csv
@@ -134,15 +135,23 @@ if __name__ == '__main__':
             error = None
             if not args.dry_run:
                 try:
+                    # Set the channel-specific managers_emails.
                     msc.api(
                         'channels/edit/',
                         method='post',
                         data={
                             'oid': oid,
                             'managers_emails': new_email,
-                            # Disable "Use default value" for managers_emails.
-                            # Adjust field name below if the API uses a different key.
-                            'managers_emails_is_default': 'false',
+                        },
+                    )
+                    # Set the default managers email for this channel and uncheck
+                    # "Use default" by sending the value without the _null flag.
+                    msc.api(
+                        'settings/defaults/publishing/edit/',
+                        method='post',
+                        data={
+                            'channel_oid': oid,
+                            'channel_managers_emails': new_email,
                         },
                     )
                 except Exception as e:
