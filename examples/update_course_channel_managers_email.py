@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 '''
-Update managers_email for course channels based on kanaal_emails.csv.
+Update managers_emails for course channels based on kanaal_emails.csv.
 
 Channel structure assumed:
   Level 1 (primary): Faculty channels
@@ -9,14 +9,14 @@ Channel structure assumed:
 
 For each course channel the first space-separated word of the title is matched
 against the CURSUS column in kanaal_emails.csv.  When a match is found the
-channel's managers_email is set to the corresponding E_MAIL_ADRES and the
+channel's managers_emails is set to the corresponding E_MAIL_ADRES and the
 "Use default value" flag is disabled.
 
 A report is written to a CSV file showing, for every course channel, the
-old managers_email and what it was changed to (or that no CSV match was found).
+old managers_emails and what it was changed to (or that no CSV match was found).
 
 NOTE: The exact API field name for the "Use default value" toggle may differ
-from 'managers_email_is_default' depending on your MediaServer version.
+from 'managers_emails_is_default' depending on your MediaServer version.
 Inspect the channels/edit/ API docs or a browser network trace to confirm.
 '''
 import argparse
@@ -109,10 +109,10 @@ if __name__ == '__main__':
         words = title.split()
         course_code = words[0] if words else ''
 
-        # Fetch the current managers_email from the API
+        # Fetch the current managers_emails from the API
         try:
             info = msc.api('channels/get/', params={'oid': oid, 'full': 'yes'})['info']
-            old_email = info.get('managers_email') or ''
+            old_email = info.get('managers_emails') or ''
         except Exception as e:
             old_email = f'(error fetching: {e})'
 
@@ -139,10 +139,10 @@ if __name__ == '__main__':
                         method='post',
                         data={
                             'oid': oid,
-                            'managers_email': new_email,
-                            # Disable "Use default value" for managers_email.
+                            'managers_emails': new_email,
+                            # Disable "Use default value" for managers_emails.
                             # Adjust field name below if the API uses a different key.
-                            'managers_email_is_default': 'false',
+                            'managers_emails_is_default': 'false',
                         },
                     )
                 except Exception as e:
