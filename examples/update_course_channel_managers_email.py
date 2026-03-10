@@ -15,10 +15,7 @@ channel's managers_emails is set to the corresponding E_MAIL_ADRES and the
 A report is written to a CSV file showing, for every course channel, the
 old managers_emails and what it was changed to (or that no CSV match was found).
 
-Two API calls are made per matched channel:
-  1. channels/edit/                      — sets managers_emails (channel-specific value)
-  2. settings/defaults/publishing/edit/  — sets channel_managers_emails (the default value)
-                                           and unchecks "Use default" by omitting the _null flag
+Sets managers_emails on each matched channel via channels/edit/.
 '''
 import argparse
 import csv
@@ -142,16 +139,6 @@ if __name__ == '__main__':
                         data={
                             'oid': oid,
                             'managers_emails': new_email,
-                        },
-                    )
-                    # Set the default managers email for this channel and uncheck
-                    # "Use default" by sending the value without the _null flag.
-                    msc.api(
-                        'settings/defaults/publishing/edit/',
-                        method='post',
-                        data={
-                            'channel_oid': oid,
-                            'channel_managers_emails': new_email,
                         },
                     )
                 except Exception as e:

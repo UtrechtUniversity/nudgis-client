@@ -14,7 +14,6 @@ sdist/
 .installed.cfg
 *.egg
 .local
-
 # Unit test / coverage reports
 .coverage*
 coverage*
@@ -22,18 +21,40 @@ htmlcov
 report.xml
 .pytest_cache
 .ruff_cache
-
 # Virtual env
 .venv/
-
 # Editor / AI
 .claude
-
 # Configuration files
 conf-*.json
-
 # Backups & downloads
 backups
 temp
 *.csv
 *.log
+*$py.class
+# C extensions
+*.so
+.Python
+env/
+downloads/
+var/
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache
+# Translations
+*.mo
+*.pot
+# Confs
+*.json
+# PyBuilder
+target/
+# Ipython Notebook
+.ipynb_checkpoints
+# Backups

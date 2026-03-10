@@ -14,10 +14,7 @@ against the CURSUS column in kanaal_emails.csv.  When a match is found, the
 email from E_MAIL_ADRES is applied to both the course channel and all of its
 edition sub-channels.
 
-Two API calls are made per updated channel:
-  1. channels/edit/                      — sets managers_emails (channel-specific value)
-  2. settings/defaults/publishing/edit/  — sets channel_managers_emails (the default value)
-                                           and unchecks "Use default" by omitting the _null flag
+Sets managers_emails on each matched channel via channels/edit/.
 
 A report CSV is written with one row per channel processed (course + editions).
 '''
@@ -38,14 +35,6 @@ def update_channel(msc, oid, new_email, dry_run):
             data={
                 'oid': oid,
                 'managers_emails': new_email,
-            },
-        )
-        msc.api(
-            'settings/defaults/publishing/edit/',
-            method='post',
-            data={
-                'channel_oid': oid,
-                'channel_managers_emails': new_email,
             },
         )
     except Exception as e:
