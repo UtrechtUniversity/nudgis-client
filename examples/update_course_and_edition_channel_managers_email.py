@@ -87,13 +87,23 @@ if __name__ == '__main__':
     # Load CSV: build a lookup dict  CURSUS -> E_MAIL_ADRES
     # -------------------------------------------------------------------------
     cursus_email = {}
-    with open(args.csv, newline='', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            cursus = row.get('CURSUS', '').strip()
-            email = row.get('E_MAIL_ADRES', '').strip()
-            if cursus and email:
-                cursus_email[cursus] = email
+    for encoding in ('utf-8-sig', 'cp1252', 'latin-1'):
+        try:
+            with open(args.csv, newline='', encoding=encoding) as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    cursus = row.get('CURSUS', '').strip()
+                    email = row.get('E_MAIL_ADRES', '').strip()
+                    if cursus and email:
+                        cursus_email[cursus] = email
+            print(f'Read CSV with encoding: {encoding}')
+            break
+        except UnicodeDecodeError:
+            cursus_email = {}
+            continue
+    else:
+        print(f'Error: could not decode {args.csv} with any supported encoding.')
+        sys.exit(1)
 
     print(f'Loaded {len(cursus_email)} CURSUS->email mapping(s) from {args.csv}')
     if not cursus_email:
