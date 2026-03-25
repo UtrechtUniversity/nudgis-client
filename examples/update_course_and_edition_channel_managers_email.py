@@ -148,11 +148,14 @@ if __name__ == '__main__':
     courses_unmatched = 0
     editions_updated = 0
 
-    for channel in course_channels:
+    total = len(course_channels)
+    for idx, channel in enumerate(course_channels, 1):
         oid = channel['oid']
         title = channel.get('title', '').strip()
         words = title.split()
         course_code = words[0] if words else ''
+
+        print(f'\r[{idx}/{total}] {title[:60]:<60}', end='', flush=True)
 
         old_email = get_old_email(msc, oid)
 
@@ -207,6 +210,8 @@ if __name__ == '__main__':
                 'new email': new_email,
             })
             editions_updated += 1
+
+    print()  # end progress line
 
     # -------------------------------------------------------------------------
     # Write report CSV
