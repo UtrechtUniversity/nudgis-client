@@ -175,11 +175,6 @@ if __name__ == '__main__':
         error = update_channel(msc, oid, new_email, args.dry_run)
         match_value = 'error' if error else 'yes'
 
-        msg = f'[{"ERROR" if error else "UPDATED"}] course | {course_code} | "{title}" | {old_email} -> {new_email}'
-        if error:
-            msg += f' | {error}'
-        print(msg)
-
         report_rows.append({
             'Match': match_value,
             'Level': 'course',
@@ -200,11 +195,6 @@ if __name__ == '__main__':
 
             ed_error = update_channel(msc, ed_oid, new_email, args.dry_run)
             ed_match = 'error' if ed_error else 'yes'
-
-            msg = f'  [{"ERROR" if ed_error else "UPDATED"}] edition | "{ed_title}" | {ed_old_email} -> {new_email}'
-            if ed_error:
-                msg += f' | {ed_error}'
-            print(msg)
 
             report_rows.append({
                 'Match': ed_match,
