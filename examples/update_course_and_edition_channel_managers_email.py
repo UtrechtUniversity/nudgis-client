@@ -17,11 +17,26 @@ edition sub-channels.
 Sets managers_emails on each matched channel via channels/edit/.
 
 A report CSV is written with one row per channel processed (course + editions).
+Unmatched channels are recorded with an empty old/new email (no API call made).
 '''
 import argparse
 import csv
 import os
+from pathlib import Path
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+# Thread-local storage so each worker thread has its own MediaServerClient
+# (requests.Session is not safe to share across threads).
+_thread_local = threading.local()
+
+
+def _get_thread_client(conf_path):
+    if not hasattr(_thread_local, 'msc'):
+        _thread_local.msc = MediaServerClient(conf_path, setup_logging=False)
+    return _thread_local.msc
 
 
 def update_channel(msc, oid, new_email, dry_run):
@@ -42,12 +57,96 @@ def update_channel(msc, oid, new_email, dry_run):
     return None
 
 
-def get_old_email(msc, oid):
-    try:
-        info = msc.api('channels/get/', params={'oid': oid, 'full': 'yes'})['info']
-        return info.get('managers_emails') or ''
-    except Exception as e:
-        return f'(error fetching: {e})'
+def _catalog_email(channel):
+    '''Return the raw managers_emails string from a catalog channel dict.
+    The catalog provides two fields: managers_emails (a resolved list of matched
+    user objects) and managers_emails_raw (the plain string as stored via
+    channels/edit/). We compare against the raw value to detect actual changes.'''
+    return channel.get('managers_emails_raw') or ''
+
+
+def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_run):
+    '''
+    Process one course channel and its edition sub-channels in a worker thread.
+    Returns (report_rows, course_updated: bool, course_already_correct: bool,
+             editions_updated: int, editions_already_correct: int).
+    Old emails are read directly from the catalog data already in memory.
+    '''
+    oid = channel['oid']
+    title = channel.get('title', '').strip()
+    words = title.split()
+    course_code = words[0] if words else ''
+
+    rows = []
+
+    if not course_code or course_code not in cursus_email:
+        rows.append({
+            'Match': 'no',
+            'Level': 'course',
+            'Parent course': '',
+            'oid': oid,
+            'code': course_code,
+            'Channel name': title,
+            'old email': _catalog_email(channel),
+            'new email': '',
+        })
+        return rows, False, False, 0, 0
+
+    new_email = cursus_email[course_code]
+    old_email = _catalog_email(channel)
+    if old_email != new_email:
+        if not dry_run:
+            msc = _get_thread_client(conf_path)
+            error = update_channel(msc, oid, new_email, dry_run)
+            match_value = 'error' if error else 'yes'
+        else:
+            match_value = 'yes'
+        course_updated = True
+        course_already_correct = False
+    else:
+        match_value = 'already correct'
+        course_updated = False
+        course_already_correct = True
+    rows.append({
+        'Match': match_value,
+        'Level': 'course',
+        'Parent course': '',
+        'oid': oid,
+        'code': course_code,
+        'Channel name': title,
+        'old email': old_email,
+        'new email': new_email,
+    })
+
+    editions_updated = 0
+    editions_already_correct = 0
+    for edition in children_of.get(oid, []):
+        ed_oid = edition['oid']
+        ed_title = edition.get('title', '').strip()
+        ed_old_email = _catalog_email(edition)
+        if ed_old_email != new_email:
+            if not dry_run:
+                msc = _get_thread_client(conf_path)
+                ed_error = update_channel(msc, ed_oid, new_email, dry_run)
+                ed_match = 'error' if ed_error else 'yes'
+            else:
+                ed_match = 'yes'
+            editions_updated += 1
+        else:
+            ed_match = 'already correct'
+            editions_already_correct += 1
+        rows.append({
+            'Match': ed_match,
+            'Level': 'edition',
+            'Parent course': title,
+            'oid': ed_oid,
+            'code': course_code,
+            'Channel name': ed_title,
+            'old email': ed_old_email,
+            'new email': new_email,
+        })
+
+    return rows, course_updated, course_already_correct, editions_updated, editions_already_correct
 
 
 if __name__ == '__main__':
@@ -81,7 +180,19 @@ if __name__ == '__main__':
         action='store_true',
         help='Print what would be changed without making any API calls.',
     )
+    parser.add_argument(
+        '--workers',
+        default=5,
+        type=int,
+        help='Number of parallel worker threads for API calls (default: 5).',
+    )
     args = parser.parse_args()
+
+    # Append the conf file stem to the report filename, e.g.
+    # update_managers_email_with_editions_report_acc.csv
+    conf_stem = Path(args.conf).stem
+    report_path = Path(args.report)
+    args.report = str(report_path.with_stem(report_path.stem + '_' + conf_stem))
 
     # -------------------------------------------------------------------------
     # Load CSV: build a lookup dict  CURSUS -> E_MAIL_ADRES
@@ -141,77 +252,57 @@ if __name__ == '__main__':
     print()
 
     # -------------------------------------------------------------------------
-    # Process course channels and their edition sub-channels
+    # Process course channels and their edition sub-channels (parallel)
     # -------------------------------------------------------------------------
-    report_rows = []
-    courses_matched = 0
+    # Each future processes one course channel + its edition sub-channels.
+    # Unmatched channels generate no API calls at all.
+    # -------------------------------------------------------------------------
+    report_rows_by_idx = {}   # idx -> rows, to preserve catalog order in report
+    courses_updated = 0
+    courses_already_correct = 0
     courses_unmatched = 0
     editions_updated = 0
-
+    editions_already_correct = 0
+    completed = 0
     total = len(course_channels)
-    for idx, channel in enumerate(course_channels, 1):
-        oid = channel['oid']
-        title = channel.get('title', '').strip()
-        words = title.split()
-        course_code = words[0] if words else ''
+    lock = threading.Lock()
 
-        print(f'\r[{idx}/{total}] {title[:60]:<60}', end='', flush=True)
+    print(f'Processing {total} course channels with {args.workers} workers...')
 
-        old_email = get_old_email(msc, oid)
-
-        if not course_code or course_code not in cursus_email:
-            report_rows.append({
-                'Match': 'no',
-                'Level': 'course',
-                'Parent course': '',
-                'oid': oid,
-                'code': course_code,
-                'Channel name': title,
-                'old email': old_email,
-                'new email': '',
-            })
-            courses_unmatched += 1
-            continue
-
-        # --- Matched course channel ---
-        new_email = cursus_email[course_code]
-        error = update_channel(msc, oid, new_email, args.dry_run)
-        match_value = 'error' if error else 'yes'
-
-        report_rows.append({
-            'Match': match_value,
-            'Level': 'course',
-            'Parent course': '',
-            'oid': oid,
-            'code': course_code,
-            'Channel name': title,
-            'old email': old_email,
-            'new email': new_email,
-        })
-        courses_matched += 1
-
-        # --- Edition sub-channels (level 3) ---
-        for edition in children_of.get(oid, []):
-            ed_oid = edition['oid']
-            ed_title = edition.get('title', '').strip()
-            ed_old_email = get_old_email(msc, ed_oid)
-
-            ed_error = update_channel(msc, ed_oid, new_email, args.dry_run)
-            ed_match = 'error' if ed_error else 'yes'
-
-            report_rows.append({
-                'Match': ed_match,
-                'Level': 'edition',
-                'Parent course': title,
-                'oid': ed_oid,
-                'code': course_code,
-                'Channel name': ed_title,
-                'old email': ed_old_email,
-                'new email': new_email,
-            })
-            editions_updated += 1
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(
+                _process_course_channel,
+                channel,
+                cursus_email,
+                children_of,
+                args.conf,
+                args.dry_run,
+            ): idx
+            for idx, channel in enumerate(course_channels)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            rows, c_updated, c_correct, ed_updated, ed_correct = future.result()
+            with lock:
+                report_rows_by_idx[idx] = rows
+                if c_updated:
+                    courses_updated += 1
+                elif c_correct:
+                    courses_already_correct += 1
+                else:
+                    courses_unmatched += 1
+                editions_updated += ed_updated
+                editions_already_correct += ed_correct
+                completed += 1
+                print(f'\r[{completed}/{total}]', end='', flush=True)
 
     print()  # end progress line
+
+    # Restore catalog order for the report
+    report_rows = []
+    for idx in range(total):
+        report_rows.extend(report_rows_by_idx[idx])
 
     # -------------------------------------------------------------------------
     # Write report CSV
@@ -223,8 +314,8 @@ if __name__ == '__main__':
         writer.writerows(report_rows)
 
     print()
-    print(f'Course channels  — matched: {courses_matched}, unmatched: {courses_unmatched}')
-    print(f'Edition channels — updated: {editions_updated}')
+    print(f'Course channels  — updated: {courses_updated}, already correct: {courses_already_correct}, unmatched: {courses_unmatched}')
+    print(f'Edition channels — updated: {editions_updated}, already correct: {editions_already_correct}')
     print(f'Report written to: {args.report}')
     if args.dry_run:
         print('(dry run — no changes were made)')
