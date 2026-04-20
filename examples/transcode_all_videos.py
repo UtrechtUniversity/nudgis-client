@@ -1,37 +1,47 @@
 #!/usr/bin/env python3
-"""
-Script to transcode and clean all videos from a Nudgis portal.
-"""
+# -*- coding: utf-8 -*-
+'''
+Script to transcode and clean all videos from a MediaServer.
+
+This script requires MediaServer >= 8.2.0.
+
+To use this script clone MediaServer client, configure it and run this file.
+git clone https://github.com/UbiCastTeam/mediaserver-client
+cd mediaserver-client
+python3 examples/transcode_all_videos.py
+'''
 import argparse
 import json
 import os
 import sys
 
 
-def transcode_all_videos(ngc, purge):
+def transcode_all_videos(msc, purge, apply):
     non_transcodable = failed = succeeded = 0
 
-    videos = ngc.get_catalog(fmt='flat').get('videos', [])
+    videos = msc.get_catalog(fmt='flat').get('videos', [])
     videos_count = len(videos)
+    prefix = '' if apply else '[DRY RUN] '
     for index, item in enumerate(videos):
-        print(f'// Media {index + 1}/{videos_count}: {item["oid"]}')
+        print(f'{prefix}// Media {index + 1}/{videos_count}: {item["oid"]}')
         try:
             transcoding_params = {'priority': 'low'}
             if purge:
                 transcoding_params['behavior'] = 'delete'
 
-            print(f'Starting transcoding task on {item["oid"]}')
-            ngc.api(
-                'tasks/start/',
-                method='post',
-                data=dict(
-                    oid=item['oid'],
-                    task='transcoding',
-                    params=json.dumps(transcoding_params),
-                ),
-                timeout=300,
-            )
-        except ngc.RequestError as e:
+            print(f'{prefix}Starting transcoding task on {item["oid"]}')
+            if apply:
+                msc.api(
+                    'tasks/start/',
+                    method='post',
+                    data=dict(
+                        oid=item['oid'],
+                        task='transcoding',
+                        params=json.dumps(transcoding_params),
+                    ),
+                    timeout=300,
+                )
+        except msc.RequestError as e:
             if 'has no usable ressources' in str(e):
                 non_transcodable += 1
             else:
@@ -47,7 +57,7 @@ def transcode_all_videos(ngc, purge):
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from ms_client.client import MediaServerClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -59,8 +69,13 @@ if __name__ == '__main__':
         default=False,
         help='If set, will delete all existing resources; otherwise, only missing transcodings will be generated.',
     )
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
     args = parser.parse_args()
 
-    ngc = NudgisClient(args.conf)
-    ngc.check_server()
-    transcode_all_videos(ngc, args.purge)
+    msc = MediaServerClient(args.conf)
+    msc.check_server()
+    transcode_all_videos(msc, args.purge, args.apply)

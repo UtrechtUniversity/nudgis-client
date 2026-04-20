@@ -68,6 +68,11 @@ def mass_update_categories(sys_args):
         required=True,
         help='Category to add or remove.'
     )
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
 
     args = parser.parse_args(sys_args)
     ngc = NudgisClient(args.conf)
@@ -88,12 +93,17 @@ def mass_update_categories(sys_args):
     else:
         raise RuntimeError('Either `--all` or `--csv` must be passed but not both.')
 
-    answer = input(
-        f'The script is about to {args.action} the "{args.category}" '
+    prefix = '' if args.apply else '[DRY RUN] '
+    print(
+        f'{prefix}The script is about to {args.action} the "{args.category}" '
         f'{"to" if args.action == "add" else "from"} '
         f'{oids if oids == "all" else len(oids)} objects in the catalog.'
-        'Proceed ? [y / n]'
     )
+    if not args.apply:
+        print('Dry run — no changes will be made. Pass --apply to execute.')
+        sys.exit(0)
+
+    answer = input('Proceed ? [y / n]')
     if answer.lower() not in ['yes', 'y']:
         sys.exit(0)
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""
+# -*- coding: utf-8 -*-
+'''
 Example script that mass moves media into a channel based on a criteria (e.g. here a specific external_ref prefix)
-"""
+'''
 import argparse
 import os
 import sys
 
+
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from ms_client.client import MediaServerClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -18,11 +20,16 @@ if __name__ == '__main__':
         nargs='?',
         type=str,
     )
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
     args = parser.parse_args()
 
-    ngc = NudgisClient(args.conf)
+    msc = MediaServerClient(args.conf)
     # ping
-    print(ngc.api('/'))
+    print(msc.api('/'))
 
     more = True
     start = ''
@@ -33,15 +40,17 @@ if __name__ == '__main__':
 
     while more:
         print('//// Making request on latest (start=%s)' % start)
-        response = ngc.api('latest/', params={'start': start, 'content': 'v', 'count': 20})
+        response = msc.api('latest/', params={'start': start, 'content': 'v', 'count': 20})
         for item in response['items']:
             oid = item['oid']
             index += 1
             print('// Media %s' % index)
-            external_ref = ngc.api('medias/get/', params={'oid': oid, 'full': 'yes'})['info'].get('external_ref')
+            external_ref = msc.api('medias/get/', params={'oid': oid, 'full': 'yes'})['info'].get('external_ref')
             if external_ref:
                 if external_ref.startswith(external_ref_prefix) and item['parent_oid'] != target_channel_oid:
-                    print(f'Moving {oid} into {target_channel_oid}')
-                    ngc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
+                    prefix = '' if args.apply else '[DRY RUN] '
+                    print(f'{prefix}Moving {oid} into {target_channel_oid}')
+                    if args.apply:
+                        msc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
         start = response['max_date']
         more = response['more']

@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 '''
 Mass edit users targeted by email from a CSV file (first column by default)
 
 This example script disables storage quota, edit the "data" dict to change the effect
 
 '''
-import argparse
 import os
 import sys
+import argparse
+
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from ms_client.client import MediaServerClient
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -44,11 +46,17 @@ if __name__ == '__main__':
         type=str
     )
 
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
+
     args = parser.parse_args()
 
-    ngc = NudgisClient(args.conf)
+    msc = MediaServerClient(args.conf)
     # ping
-    print(ngc.api('/'))
+    print(msc.api('/'))
 
     with open(args.csv, 'r') as f:
         csv_data = f.read().strip()
@@ -56,7 +64,8 @@ if __name__ == '__main__':
         freed = 0
         lines = [line for line in csv_data.split('\n') if (line and not line.startswith('#'))]
         total_lines = len(lines)
-        print(f'About to edit {total_lines} users')
+        prefix = '' if args.apply else '[DRY RUN] '
+        print(f'{prefix}About to edit {total_lines} users')
 
         for index, line in enumerate(lines):
             user_email = line.split(args.csv_separator)[args.column]
@@ -67,9 +76,10 @@ if __name__ == '__main__':
                 # speaker_id, shared, storage_quota.
                 data = {'email': user_email, 'storage_quota': 0}
                 try:
-                    print(f'[{index + 1}/{total_lines}] About to edit {user_email}')
-                    ngc.api('users/edit/', method='post', data=data)
+                    print(f'{prefix}[{index + 1}/{total_lines}] About to edit {user_email}')
+                    if args.apply:
+                        msc.api('users/edit/', method='post', data=data)
                     count += 1
                 except Exception as e:
                     print(f'Error on {user_email}: {e}')
-        print(f'Edited {count} users')
+        print(f'{prefix}Edited {count} users')
