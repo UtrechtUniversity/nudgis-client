@@ -163,9 +163,9 @@ if __name__ == '__main__':
         type=str,
     )
     parser.add_argument(
-        '--dry-run',
+        '--apply',
         action='store_true',
-        help='Print what would be changed without making any API calls.',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
     )
     parser.add_argument(
         '--workers',
@@ -264,7 +264,7 @@ if __name__ == '__main__':
                 cursus_email,
                 children_of,
                 args.conf,
-                args.dry_run,
+                not args.apply,
                 server_url,
                 faculty_channels[channel['parent_oid']].get('title', ''),
             ): idx
@@ -310,7 +310,7 @@ if __name__ == '__main__':
         summary_lines.append(f"  Courses  — updated: {s['c_updated']}, already correct: {s['c_correct']}, unmatched: {s['c_unmatched']}")
         summary_lines.append(f"  Editions — updated: {s['ed_updated']}, already correct: {s['ed_correct']}")
     summary_lines.append(f'\nReport written to: {args.report}')
-    if args.dry_run:
+    if not args.apply:
         summary_lines.append('(dry run — no changes were made)')
 
     summary_text = '\n'.join(summary_lines)
