@@ -53,7 +53,7 @@ def clean_tree(tree, deleted_oids):
             clean_tree(channel, deleted_oids)
 
 
-def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None):
+def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300):
     if tree is None:
         tree = msc.get_catalog(fmt='tree')
     channel_oid_blacklist = list(channel_oid_blacklist)
@@ -79,7 +79,8 @@ def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply
             response = msc.api(
                 'catalog/bulk_delete/',
                 method='post',
-                data=dict(oids=list(empty_by_oid))
+                data=dict(oids=list(empty_by_oid)),
+                timeout=timeout,
             )
             deleted_oids = {
                 oid
@@ -147,6 +148,13 @@ def main():
               '1=faculty, 2=course, 3=edition. Default 0 means all levels.'),
         type=int)
 
+    parser.add_argument(
+        '--timeout',
+        default=300,
+        dest='timeout',
+        help='Timeout in seconds for bulk_delete API calls. Default: %(default)s.',
+        type=int)
+
     args = parser.parse_args()
 
     print(f'Configuration path: {args.configuration}')
@@ -208,7 +216,7 @@ def main():
         selected_titles = [faculties[i - 1]['title'] for i in indices]
         print(f'\nProcessing: {", ".join(selected_titles)}')
 
-    report_rows = delete_empty_channels(msc, args.exclude_oid, max_date, args.min_depth, args.apply, faculty_oids=faculty_oids, tree=tree)
+    report_rows = delete_empty_channels(msc, args.exclude_oid, max_date, args.min_depth, args.apply, faculty_oids=faculty_oids, tree=tree, timeout=args.timeout)
 
     if report_rows:
         faculty_counts = {}
