@@ -231,7 +231,11 @@ if __name__ == '__main__':
     # -------------------------------------------------------------------------
     # Identify level-1 (faculty) and level-2 (course) channels
     # -------------------------------------------------------------------------
-    faculty_channels = {ch['oid']: ch for ch in all_channels if not ch.get('parent_oid')}
+    RECYCLE_BIN_OID = 'c00000000000000trash'
+    faculty_channels = {
+        ch['oid']: ch for ch in all_channels
+        if not ch.get('parent_oid') and ch['oid'] != RECYCLE_BIN_OID
+    }
     course_channels = [ch for ch in all_channels if ch.get('parent_oid') in faculty_channels]
 
     print(f'Faculty channels (level 1): {len(faculty_channels)}')
@@ -304,11 +308,12 @@ if __name__ == '__main__':
         writer.writeheader()
         writer.writerows(report_rows)
 
+    updated_label = 'updated' if args.apply else 'would be updated'
     summary_lines = []
     for s in sorted(faculty_stats.values(), key=lambda x: x['title']):
         summary_lines.append(s['title'])
-        summary_lines.append(f"  Courses  — updated: {s['c_updated']}, already correct: {s['c_correct']}, unmatched: {s['c_unmatched']}")
-        summary_lines.append(f"  Editions — updated: {s['ed_updated']}, already correct: {s['ed_correct']}")
+        summary_lines.append(f"  Courses  — {updated_label}: {s['c_updated']}, already correct: {s['c_correct']}, unmatched: {s['c_unmatched']}")
+        summary_lines.append(f"  Editions — {updated_label}: {s['ed_updated']}, already correct: {s['ed_correct']}")
     summary_lines.append(f'\nReport written to: {args.report}')
     if not args.apply:
         summary_lines.append('(dry run — no changes were made)')
