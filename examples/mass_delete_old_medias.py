@@ -9,13 +9,16 @@ their medias by applying a category to them.
 
 import argparse
 from contextlib import nullcontext
+import csv
 from datetime import date, datetime, timedelta
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import html
 from itertools import zip_longest
 import logging
 import os
 from pathlib import Path
+import re
 import smtplib
 import ssl
 import sys
@@ -23,11 +26,12 @@ from typing import Optional
 from urllib.parse import urlparse
 
 try:
-    from nudgisclient import NudgisClient
+    from ms_client.client import MediaServerClient
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
-from nudgisclient.lib.utils import format_bytes, format_timedelta
+    from ms_client.client import MediaServerClient
+from ms_client.lib.utils import format_bytes, format_timedelta
+
 
 logger = logging.getLogger(__name__)
 DEFAULT_PLAIN_EMAIL_TEMPLATE = (
@@ -84,8 +88,33 @@ class MisconfiguredError(Exception):
     pass
 
 
+def _build_channel_to_faculty_map(channels: list[dict]) -> dict[str, str]:
+    '''Map every channel oid to its top-level (faculty) oid by walking parent_oid.'''
+    by_oid = {ch['oid']: ch for ch in channels}
+    cache: dict[str, str] = {}
+
+    def find_root(oid: str) -> str:
+        if oid in cache:
+            return cache[oid]
+        ch = by_oid.get(oid)
+        if ch is None:
+            cache[oid] = oid
+            return oid
+        parent = ch.get('parent_oid')
+        if not parent or parent not in by_oid:
+            cache[oid] = oid
+            return oid
+        root = find_root(parent)
+        cache[oid] = root
+        return root
+
+    for oid in by_oid:
+        find_root(oid)
+    return cache
+
+
 def _get_medias(
-    ngc: NudgisClient,
+    msc: MediaServerClient,
     added_after: Optional[date] = None,
     added_before: Optional[date] = None,
     views_max_count: Optional[int] = None,
@@ -93,13 +122,15 @@ def _get_medias(
     views_after: Optional[date] = None,
     views_before: Optional[date] = None,
     skip_categories: list[str] = (),
+    faculty_oids: Optional[set] = None,
 ) -> list[dict]:
-    catalog = ngc.get_catalog('flat')
+    catalog = msc.get_catalog('flat')
+    channel_to_faculty = _build_channel_to_faculty_map(catalog['channels']) if faculty_oids else None
     unwatched = {}
     if views_max_count is not None:
         unwatched = {
             unwatched['object_id']: unwatched['views_over_period']
-            for unwatched in ngc.api(
+            for unwatched in msc.api(
                 'stats/unwatched/',
                 params={
                     'playback_threshold': views_playback_threshold,
@@ -113,62 +144,85 @@ def _get_medias(
 
     channels = {channel['oid']: channel for channel in catalog['channels']}
     selected_medias = []
+    records = []
     for key in ('videos', 'lives'):
         medias = catalog.get(key, ())
         for media in medias:
+            if faculty_oids is not None:
+                root = channel_to_faculty.get(media.get('parent_oid'))
+                if root not in faculty_oids:
+                    continue
             add_date = datetime.strptime(media['add_date'], '%Y-%m-%d %H:%M:%S').date()
             categories = {cat.strip(' \r\t').lower() for cat in (media['categories'] or '').strip('\n').split('\n')}
             media_pp = f'{media["title"]} [{media["oid"]}]'
+            status = None
+            reason = ''
             if added_before and add_date >= added_before:
                 before_date_pp = added_before.strftime('%Y-%m-%d')
-                logger.debug(
-                    '%s was skipped because it was added after %s.', media_pp, before_date_pp
-                )
+                status = 'skip_added_after'
+                reason = f'added after {before_date_pp}'
+                logger.debug(f'{media_pp} was skipped because it was added after {before_date_pp}.')
             elif added_after and add_date < added_after:
                 after_date_pp = added_after.strftime('%Y-%m-%d')
-                logger.debug(
-                    '%s was skipped because it was added before %s.', media_pp, after_date_pp
-                )
+                status = 'skip_added_before'
+                reason = f'added before {after_date_pp}'
+                logger.debug(f'{media_pp} was skipped because it was added before {after_date_pp}.')
             elif views_max_count and media['oid'] not in unwatched:
                 views_after_pp = views_after.strftime('%Y-%m-%d')
                 views_before_pp = views_before.strftime('%Y-%m-%d')
+                status = 'skip_views'
+                reason = (
+                    f'viewed more than {views_max_count} times '
+                    f'between {views_after_pp} and {views_before_pp}'
+                )
                 logger.debug(
-                    '%s was skipped because it was viewed more than %s times between %s and %s.',
-                    media_pp, views_max_count, views_after_pp, views_before_pp
+                    f'{media_pp} was skipped because it was viewed more than {views_max_count} '
+                    f'times between {views_after_pp} and {views_before_pp}.'
                 )
             elif skip_categories and (common_categories := categories.intersection(skip_categories)):
-                logger.debug(
-                    '%s was skipped because it has the categories %s.', media_pp, common_categories
-                )
+                status = 'skip_categories'
+                reason = f'has categories {sorted(common_categories)}'
+                logger.debug(f'{media_pp} was skipped because it has the categories {common_categories}.')
             else:
+                status = 'delete'
+                reason = 'selected for deletion'
                 if views_max_count:
                     media['views_over_period'] = unwatched[media['oid']]
                     media['views_after'] = views_after.strftime('%Y-%m-%d')
                     media['views_before'] = views_before.strftime('%Y-%m-%d')
                 media['managers_emails'] = channels.get(media['parent_oid'], {}).get('managers_emails')
                 selected_medias.append(media)
+            records.append({
+                'oid': media['oid'],
+                'title': media['title'],
+                'parent_oid': media.get('parent_oid'),
+                'add_date': media['add_date'],
+                'storage_used': media['storage_used'],
+                'status': status,
+                'reason': reason,
+            })
 
     storage_used = sum(media['storage_used'] for media in selected_medias)
     logger.info(
-        'Found %s medias matching the given filters (size: %s).',
-        len(selected_medias), format_bytes(storage_used)
+        f'Found {len(selected_medias)} medias matching the given filters '
+        f'(size: {format_bytes(storage_used)}).'
     )
-    return selected_medias
+    return selected_medias, records, catalog['channels']
 
 
-def _get_users(ngc: NudgisClient, page_size=500):
+def _get_users(msc: MediaServerClient, page_size=500):
     users = []
     offset = 0
-    response = ngc.api('users/', params={'limit': page_size, 'offset': offset})
+    response = msc.api('users/', params={'limit': page_size, 'offset': offset})
     while response['users']:
         users += response['users']
         offset += page_size
-        response = ngc.api('users/', params={'limit': page_size, 'offset': offset})
+        response = msc.api('users/', params={'limit': page_size, 'offset': offset})
     return users
 
 
 def _prepare_mail(
-    ngc: NudgisClient,
+    msc: MediaServerClient,
     sender: str,
     speaker_email: str,
     medias: list[dict],
@@ -177,18 +231,18 @@ def _prepare_mail(
     html_template: Optional[str],
     plain_template: Optional[str],
     email_subject_template: str,
-) -> tuple[str, dict]:
+) -> tuple[str, dict, list[dict]]:
     # Ensure each media is only once in the list.
     medias = list({media['oid']: media for media in medias}.values())
 
-    ms_perma_url = ngc.conf['SERVER_URL'] + '/permalink/'
-    ms_edit_url = ngc.conf['SERVER_URL'] + '/edit/'
+    ms_perma_url = msc.conf['SERVER_URL'] + '/permalink/'
+    ms_edit_url = msc.conf['SERVER_URL'] + '/edit/iframe/'
     context = {
         'media_count': len(medias),
         'media_size_pp': format_bytes(sum(media['storage_used'] for media in medias)),
         'delete_date': delete_date.strftime('%B %d, %Y'),
         'skip_categories': ' | '.join(f'"{cat}"' for cat in skip_categories),
-        'platform_hostname': urlparse(ngc.conf['SERVER_URL']).netloc,
+        'platform_hostname': urlparse(msc.conf['SERVER_URL']).netloc,
     }
     message = MIMEMultipart('alternative')
     message['Subject'] = email_subject_template.format(**context)
@@ -200,10 +254,13 @@ def _prepare_mail(
     for media in medias:
         media_add_date = datetime.strptime(media['add_date'], '%Y-%m-%d %H:%M:%S')
         media_context = {
+            'oid': media['oid'],
+            'parent_oid': media.get('parent_oid'),
+            'storage_used': media.get('storage_used', 0),
             'title': media['title'],
             'add_date': media_add_date.strftime('%Y-%m-%d'),
             'age': format_timedelta(now - media_add_date),
-            'view_url': f'{ms_perma_url}{media["oid"]}/',
+            'view_url': f'{ms_perma_url}{media["oid"]}/iframe/',
             'edit_url': f'{ms_edit_url}{media["oid"]}/#id_categories',
         }
         if 'views_over_period' in media:
@@ -235,10 +292,10 @@ def _prepare_mail(
             ).format(**ctx)
             for ctx in media_contexts
         )
-        html = html_template.format(list_of_media=html_media_list, **context)
-        message.attach(MIMEText(html, 'html'))
+        html_body = html_template.format(list_of_media=html_media_list, **context)
+        message.attach(MIMEText(html_body, 'html'))
     context['media_oids'] = [media['oid'] for media in medias]
-    return message.as_string(), context
+    return message.as_string(), context, media_contexts
 
 
 def _get_templates(
@@ -286,7 +343,7 @@ def _get_templates(
 
 
 def _warn_speakers_about_deletion(
-    ngc: NudgisClient,
+    msc: MediaServerClient,
     medias: list[dict],
     delete_date: date,
     skip_categories: list[str],
@@ -297,16 +354,16 @@ def _warn_speakers_about_deletion(
     fallback_email: str,
     apply: bool = False,
 ):
-    smtp_server = ngc.conf.get('SMTP_SERVER')
-    smtp_login = ngc.conf.get('SMTP_LOGIN')
-    smtp_password = ngc.conf.get('SMTP_PASSWORD')
-    smtp_email = ngc.conf.get('SMTP_SENDER_EMAIL')
+    smtp_server = msc.conf.get('SMTP_SERVER')
+    smtp_login = msc.conf.get('SMTP_LOGIN')
+    smtp_password = msc.conf.get('SMTP_PASSWORD')
+    smtp_email = msc.conf.get('SMTP_SENDER_EMAIL')
     if not (smtp_server and smtp_login and smtp_password and smtp_email):
         smtp_password = '*' * len(smtp_password)
         raise MisconfiguredError(f'{smtp_server=} / {smtp_login=} / {smtp_password=} / {smtp_email=}')
     html_template, plain_template = _get_templates(html_email_template, plain_email_template)
 
-    users = _get_users(ngc)
+    users = _get_users(msc)
     valid_emails = {
         email: (user.get('speaker_id') or '').strip()
         for user in users
@@ -329,7 +386,7 @@ def _warn_speakers_about_deletion(
         for speaker_id, speaker_email in zip_longest(speakers_ids, speakers_emails):
             if speaker_email and speaker_email in valid_emails:
                 recipients.append(speaker_email)
-            elif speaker_id and emails_by_speaker_id[speaker_id] in valid_emails:
+            elif speaker_id and speaker_id in emails_by_speaker_id:
                 recipients.append(emails_by_speaker_id[speaker_id])
             elif fallback_to_channel_manager and media['managers_emails']:
                 for manager_email in media['managers_emails'].split('\n'):
@@ -345,7 +402,7 @@ def _warn_speakers_about_deletion(
 
     to_send = {
         speaker_email: _prepare_mail(
-            ngc,
+            msc,
             sender=smtp_email,
             speaker_email=speaker_email,
             medias=speaker_medias,
@@ -358,35 +415,36 @@ def _warn_speakers_about_deletion(
     }
 
     if apply:
-        context = ssl.create_default_context()
-        smtp_ctx_manager = smtplib.SMTP_SSL(smtp_server, 465, context=context)
+        ssl_context = ssl.create_default_context()
+        smtp_ctx_manager = smtplib.SMTP_SSL(smtp_server, 465, context=ssl_context)
     else:
         smtp_ctx_manager = nullcontext()
 
+    report_data = {}
     sent_count = 0
     with smtp_ctx_manager as smtp:
         if apply:
             smtp.login(smtp_login, smtp_password)
-        for recipient, (message, context) in to_send.items():
+        for recipient, (message, context, media_details) in to_send.items():
             try:
                 if apply:
                     smtp.sendmail(smtp_email, recipient, message)
             except smtplib.SMTPException as err:
                 logger.error(
-                    'Cannot send email to "%s": %s. '
-                    "Medias will be added to the fallback recipient's email.",
-                    recipient, err
+                    f'Cannot send email to "{recipient}": {err}. '
+                    'Medias will be added to the fallback recipient\'s email.'
                 )
                 to_fallback += medias_per_speaker[recipient]
             else:
                 if apply:
-                    logger.debug('Sent "%s" an email about %s.', recipient, context)
+                    logger.debug(f'Sent "{recipient}" an email about {context}.')
                 else:
-                    logger.debug('[Dry run] Would have sent "%s" an email about %s.', recipient, context)
+                    logger.debug(f'[Dry run] Would have sent "{recipient}" an email about {context}.')
+                report_data[recipient] = (context, media_details)
                 sent_count += 1
         if to_fallback:
-            fallback_message, context = _prepare_mail(
-                ngc,
+            fallback_message, context, media_details = _prepare_mail(
+                msc,
                 sender=smtp_email,
                 speaker_email=fallback_email,
                 medias=to_fallback,
@@ -401,24 +459,26 @@ def _warn_speakers_about_deletion(
                     smtp.sendmail(smtp_email, fallback_email, fallback_message)
             except Exception as err:
                 logger.error(
-                    'Mail delivery to fallback email address "%s" failed.\n%s',
-                    fallback_email, fallback_message
+                    f'Mail delivery to fallback email address "{fallback_email}" failed.\n'
+                    f'{fallback_message}'
                 )
                 raise err
             else:
                 if apply:
-                    logger.debug('Sent "%s" an email about %s.', fallback_email, context)
+                    logger.debug(f'Sent "{fallback_email}" an email about {context}.')
                 else:
-                    logger.debug('[Dry run] Would have sent "%s" an email about %s.', fallback_email, context)
+                    logger.debug(f'[Dry run] Would have sent "{fallback_email}" an email about {context}.')
+                report_data[fallback_email] = (context, media_details)
                 sent_count += 1
         if apply:
-            logger.info('Sent %s emails.', sent_count)
+            logger.info(f'Sent {sent_count} emails.')
         else:
-            logger.info('[Dry run] %s emails would have been sent.', sent_count)
+            logger.info(f'[Dry run] {sent_count} emails would have been sent.')
+    return report_data
 
 
-def _delete_medias(ngc: NudgisClient, medias: list[dict], apply: bool = False):
-    ms_url = ngc.conf['SERVER_URL'] + '/permalink/'
+def _delete_medias(msc: MediaServerClient, medias: list[dict], apply: bool = False):
+    ms_url = msc.conf['SERVER_URL'] + '/permalink/'
     medias = {media['oid']: media for media in medias}
     if not medias:
         logger.info('No media to delete.')
@@ -426,36 +486,301 @@ def _delete_medias(ngc: NudgisClient, medias: list[dict], apply: bool = False):
     deleted_count = 0
     deleted_size = 0
     if apply:
-        response = ngc.api(
+        response = msc.api(
             'catalog/bulk_delete/',
             method='post',
             data=dict(oids=list(medias.keys()))
         )
         for oid, result in response['statuses'].items():
             if result['status'] == 200:
-                logger.debug('Media %s%s has been deleted.', ms_url, oid)
+                logger.debug(f'Media {ms_url}{oid} has been deleted.')
                 deleted_count += 1
                 deleted_size += medias[oid]['storage_used']
             else:
                 err = result['message']
                 logger.error(
-                    'An error occurred while attempting to delete media %s%s. '
-                    'The media has not been deleted: %s.',
-                    ms_url, oid, err
+                    f'An error occurred while attempting to delete media {ms_url}{oid}. '
+                    f'The media has not been deleted: {err}.'
                 )
         logger.info(
-            '%s medias (%s) have been successfully deleted.',
-            deleted_count, format_bytes(deleted_size)
+            f'{deleted_count} medias ({format_bytes(deleted_size)}) have been successfully deleted.'
         )
     else:
         for oid, media in medias.items():
-            logger.debug('[Dry run] Media %s%s would have been deleted.', ms_url, oid)
+            logger.debug(f'[Dry run] Media {ms_url}{oid} would have been deleted.')
             deleted_count += 1
             deleted_size += media['storage_used']
         logger.info(
-            '[Dry run] %s medias (%s) would have been have been deleted.',
-            deleted_count, format_bytes(deleted_size)
+            f'[Dry run] {deleted_count} medias ({format_bytes(deleted_size)}) '
+            f'would have been have been deleted.'
         )
+
+
+STATUS_COLORS = {
+    'delete': '#dc2626',
+    'skip_added_after': '#2563eb',
+    'skip_added_before': '#7c3aed',
+    'skip_views': '#ea580c',
+    'skip_categories': '#16a34a',
+}
+STATUS_LABELS = {
+    'delete': 'To delete',
+    'skip_added_after': 'Skipped — too recent',
+    'skip_added_before': 'Skipped — too old',
+    'skip_views': 'Skipped — viewed enough',
+    'skip_categories': 'Skipped — protected category',
+}
+
+
+_REPORT_STYLE = '''
+body { font-family: system-ui, -apple-system, sans-serif; font-size: 14px;
+       background: #f5f6f8; color: #1a1a2e; padding: 24px; }
+h1 { font-size: 1.4rem; margin-bottom: 6px; }
+.meta { font-size: 0.85rem; color: #666; margin-bottom: 16px; }
+.legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.legend span { padding: 3px 10px; border-radius: 10px; color: #fff;
+               font-size: 0.78rem; font-weight: 600; }
+details { margin: 2px 0; }
+details > summary { cursor: pointer; padding: 4px 6px; border-radius: 6px;
+                    user-select: none; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: '▸ '; color: #888; }
+details[open] > summary::before { content: '▾ '; }
+details > summary:hover { background: #e8eaf0; }
+ul.medias { list-style: none; padding-left: 22px; margin: 4px 0;
+            border-left: 2px solid #dde1ea; }
+ul.medias li { margin: 2px 0; padding: 2px 6px; border-radius: 4px; }
+ul.medias li a { text-decoration: none; color: inherit; }
+ul.medias li a:hover { text-decoration: underline; }
+.oid { color: #888; font-family: monospace; font-size: 0.8rem; }
+.reason { color: #666; font-size: 0.8rem; margin-left: 6px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+       margin-right: 6px; vertical-align: middle; }
+details > div.children { padding-left: 22px; border-left: 2px solid #dde1ea;
+                         margin-left: 10px; }
+.badge { font-size: 0.72rem; padding: 1px 6px; border-radius: 10px;
+         font-weight: 600; white-space: nowrap; margin-left: 4px;
+         color: #fff; }
+.controls { margin-bottom: 16px; display: flex; gap: 8px; }
+.controls button { padding: 5px 14px; border: 1px solid #ccc;
+                   border-radius: 6px; background: #fff; cursor: pointer;
+                   font-size: 0.85rem; }
+.controls button:hover { background: #e8eaf0; }
+'''
+
+
+_REPORT_SCRIPT = '''
+function expandAll() {
+  document.querySelectorAll('details').forEach(d => d.open = true);
+}
+function collapseAll() {
+  document.querySelectorAll('details').forEach(d => d.open = false);
+}
+'''
+
+
+def _generate_media_report(
+    channels: list[dict],
+    records: list[dict],
+    server_url: str,
+    output_path: Path,
+    apply: bool,
+):
+    '''Generate an HTML tree report of every processed media, colour-coded by status.'''
+    by_oid = {ch['oid']: ch for ch in channels}
+    children_by_parent: dict[Optional[str], list[dict]] = {}
+    for ch in channels:
+        parent = ch.get('parent_oid') if ch.get('parent_oid') in by_oid else None
+        children_by_parent.setdefault(parent, []).append(ch)
+    medias_by_parent: dict[Optional[str], list[dict]] = {}
+    for record in records:
+        medias_by_parent.setdefault(record.get('parent_oid'), []).append(record)
+
+    permalink_url = server_url.rstrip('/') + '/permalink/'
+
+    def aggregate(oid):
+        counts: dict[str, int] = {}
+        for media in medias_by_parent.get(oid, []):
+            counts[media['status']] = counts.get(media['status'], 0) + 1
+        for child in children_by_parent.get(oid, []):
+            for status, count in aggregate(child['oid']).items():
+                counts[status] = counts.get(status, 0) + count
+        return counts
+
+    def render_channel(ch):
+        counts = aggregate(ch['oid'])
+        if not counts:
+            return ''
+        total = sum(counts.values())
+        badges = ''.join(
+            f'<span class="badge" style="background:{STATUS_COLORS[s]}" title="{STATUS_LABELS[s]}">{counts[s]}</span>'
+            for s in STATUS_COLORS if s in counts
+        )
+        summary = (
+            f'<summary><strong>{html.escape(ch.get("title", "(untitled)"))}</strong> '
+            f'<span class="meta">({total} medias)</span>{badges}</summary>'
+        )
+        parts = [f'<details>{summary}<div class="children">']
+        for media in sorted(medias_by_parent.get(ch['oid'], []), key=lambda m: m['title'].lower()):
+            color = STATUS_COLORS.get(media['status'], '#000')
+            url = f'{permalink_url}{media["oid"]}/iframe/'
+            parts.append(
+                f'<ul class="medias"><li>'
+                f'<span class="dot" style="background:{color}"></span>'
+                f'<a href="{html.escape(url)}" target="_blank">{html.escape(media["title"])}</a> '
+                f'<span class="oid">[{media["oid"]}]</span>'
+                f'<span class="reason">— {html.escape(media["reason"])}</span>'
+                f'</li></ul>'
+            )
+        for sub in sorted(children_by_parent.get(ch['oid'], []), key=lambda c: c.get('title', '').lower()):
+            parts.append(render_channel(sub))
+        parts.append('</div></details>')
+        return ''.join(parts)
+
+    roots = sorted(children_by_parent.get(None, []), key=lambda c: c.get('title', '').lower())
+    tree_html = ''.join(render_channel(r) for r in roots)
+
+    orphans = medias_by_parent.get(None, []) + [
+        m for m in records
+        if m.get('parent_oid') and m['parent_oid'] not in by_oid
+    ]
+    if orphans:
+        items = []
+        for media in sorted(orphans, key=lambda m: m['title'].lower()):
+            color = STATUS_COLORS.get(media['status'], '#000')
+            url = f'{permalink_url}{media["oid"]}/iframe/'
+            items.append(
+                f'<li><span class="dot" style="background:{color}"></span>'
+                f'<a href="{html.escape(url)}" target="_blank">{html.escape(media["title"])}</a> '
+                f'<span class="oid">[{media["oid"]}]</span>'
+                f'<span class="reason">— {html.escape(media["reason"])}</span></li>'
+            )
+        tree_html += (
+            f'<details><summary><strong>(no parent channel)</strong> '
+            f'<span class="meta">({len(orphans)} medias)</span></summary>'
+            f'<ul class="medias">{"".join(items)}</ul></details>'
+        )
+
+    overall = {}
+    for record in records:
+        overall[record['status']] = overall.get(record['status'], 0) + 1
+    legend = ''.join(
+        f'<span style="background:{STATUS_COLORS[s]}">{STATUS_LABELS[s]} '
+        f'({overall.get(s, 0)})</span>'
+        for s in STATUS_COLORS
+    )
+    prefix = '' if apply else '[Dry run] '
+    generated = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    doc = (
+        f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f'<title>{prefix}Media classification report</title>'
+        f'<style>{_REPORT_STYLE}</style></head><body>'
+        f'<h1>{prefix}Media classification report</h1>'
+        f'<p class="meta">Server: <strong>{html.escape(server_url)}</strong> '
+        f'&nbsp;|&nbsp; Generated: <strong>{generated}</strong> '
+        f'&nbsp;|&nbsp; Medias scanned: <strong>{len(records)}</strong></p>'
+        f'<div class="legend">{legend}</div>'
+        f'<div class="controls">'
+        f'<button onclick="expandAll()">Expand all</button>'
+        f'<button onclick="collapseAll()">Collapse all</button>'
+        f'</div>'
+        f'{tree_html}'
+        f'<script>{_REPORT_SCRIPT}</script>'
+        f'</body></html>'
+    )
+    output_path.write_text(doc, encoding='utf-8')
+    logger.info(f'Wrote media report to {output_path}.')
+
+
+def _generate_email_report(
+    report_data: dict,
+    server_url: str,
+    output_path: Path,
+    apply: bool,
+):
+    '''Generate an HTML tree report of every email that was (or would be) sent.'''
+    prefix = '' if apply else '[Dry run] '
+    generated = datetime.now().strftime('%Y-%m-%d %H:%M')
+    items = []
+    total_medias = 0
+    for recipient, (context, media_details) in sorted(report_data.items()):
+        total_medias += context['media_count']
+        media_items = ''.join(
+            f'<li><a href="{html.escape(m["view_url"])}" target="_blank">{html.escape(m["title"])}</a> '
+            f'<span class="reason">added {m["add_date"]} ({m["age"]} ago), viewed {html.escape(m["views"])}</span></li>'
+            for m in media_details
+        )
+        items.append(
+            f'<details><summary><strong>{html.escape(recipient)}</strong> '
+            f'<span class="meta">— {context["media_count"]} medias, {context["media_size_pp"]}</span></summary>'
+            f'<div class="children">'
+            f'<p class="meta">Delete date: <strong>{html.escape(context["delete_date"])}</strong> '
+            f'&nbsp;|&nbsp; Skip categories: {html.escape(context["skip_categories"])} '
+            f'&nbsp;|&nbsp; Platform: {html.escape(context["platform_hostname"])}</p>'
+            f'<ul class="medias">{media_items}</ul>'
+            f'</div></details>'
+        )
+
+    doc = (
+        f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f'<title>{prefix}Email notifications report</title>'
+        f'<style>{_REPORT_STYLE}</style></head><body>'
+        f'<h1>{prefix}Email notifications report</h1>'
+        f'<p class="meta">Server: <strong>{html.escape(server_url)}</strong> '
+        f'&nbsp;|&nbsp; Generated: <strong>{generated}</strong> '
+        f'&nbsp;|&nbsp; Recipients: <strong>{len(report_data)}</strong> '
+        f'&nbsp;|&nbsp; Medias notified: <strong>{total_medias}</strong></p>'
+        f'<div class="controls">'
+        f'<button onclick="expandAll()">Expand all</button>'
+        f'<button onclick="collapseAll()">Collapse all</button>'
+        f'</div>'
+        f'{"".join(items)}'
+        f'<script>{_REPORT_SCRIPT}</script>'
+        f'</body></html>'
+    )
+    output_path.write_text(doc, encoding='utf-8')
+    logger.info(f'Wrote email report to {output_path}.')
+
+
+def _generate_email_csv(
+    report_data: dict,
+    channels: list[dict],
+    output_path: Path,
+):
+    '''One row per unique (email, faculty) pair with an aggregate video count.'''
+    channel_to_faculty = _build_channel_to_faculty_map(channels)
+    title_by_oid = {ch['oid']: ch.get('title', '') for ch in channels}
+
+    rows: dict[tuple[str, str], dict] = {}
+    for recipient, (context, media_details) in report_data.items():
+        for media in media_details:
+            faculty_oid = channel_to_faculty.get(media.get('parent_oid'), '') or ''
+            key = (recipient, faculty_oid)
+            row = rows.setdefault(key, {
+                'email': recipient,
+                'faculty_title': title_by_oid.get(faculty_oid, ''),
+                'video_count': 0,
+                '_total_bytes': 0,
+                'delete_date': context['delete_date'],
+            })
+            row['video_count'] += 1
+            row['_total_bytes'] += media.get('storage_used', 0)
+
+    fieldnames = ['email', 'faculty_title', 'video_count', 'total_size', 'delete_date']
+    sorted_rows = sorted(rows.values(), key=lambda r: (r['email'], r['faculty_title']))
+    with output_path.open('w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted_rows:
+            writer.writerow({
+                'email': row['email'],
+                'faculty_title': row['faculty_title'],
+                'video_count': row['video_count'],
+                'total_size': format_bytes(row['_total_bytes']),
+                'delete_date': row['delete_date'],
+            })
+    logger.info(f'Wrote email CSV ({len(sorted_rows)} rows) to {output_path}.')
 
 
 def delete_old_medias(sys_args):
@@ -636,6 +961,38 @@ def delete_old_medias(sys_args):
         action='store_true',
     )
     parser.add_argument(
+        '--media-report',
+        help='Path of the HTML media-classification report to write. '
+             'The report is a collapsible tree of channels with each video '
+             'colour-coded by status (to-delete / various skip reasons). '
+             'Defaults to "./media_report_<hostname>_<timestamp>.html". '
+             'Pass an empty string to disable.',
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--email-report',
+        help='Path of the HTML email-notifications report to write. '
+             'The report is a collapsible tree of recipients with their '
+             'email metadata and a clickable list of videos. '
+             'Defaults to "./email_report_<hostname>_<timestamp>.html". '
+             'Pass an empty string to disable. Only produced when emails are '
+             'sent or simulated.',
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        '--email-csv',
+        help='Path of the per-(email, faculty) CSV summary to write. One row '
+             'per unique (recipient, top-level faculty channel) pair with an '
+             'aggregate video count. Defaults to '
+             '"./email_report_<hostname>_<timestamp>.csv". '
+             'Pass an empty string to disable. Only produced when emails are '
+             'sent or simulated.',
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
         '--log-level',
         help='Log level.',
         default='info',
@@ -646,15 +1003,24 @@ def delete_old_medias(sys_args):
     logging.basicConfig()
     logger.setLevel(args.log_level.upper())
 
-    ngc = NudgisClient(args.conf)
-    ngc.conf['TIMEOUT'] = max(600, ngc.conf['TIMEOUT'])
+    msc = MediaServerClient(args.conf)
+    msc.conf['TIMEOUT'] = max(600, msc.conf['TIMEOUT'])
+
+    hostname_slug = urlparse(msc.conf['SERVER_URL']).netloc.replace('.', '_')
+    timestamp_slug = datetime.now().strftime('%Y%m%dT%H%M%S')
+    if args.media_report is None:
+        args.media_report = f'./media_report_{hostname_slug}_{timestamp_slug}.html'
+    if args.email_report is None:
+        args.email_report = f'./email_report_{hostname_slug}_{timestamp_slug}.html'
+    if args.email_csv is None:
+        args.email_csv = f'./email_report_{hostname_slug}_{timestamp_slug}.csv'
 
     if args.apply:
         answer = input(
             'The script is running in normal mode. '
             'Emails will be sent, medias will be deleted.\n'
             'Please ensure that the recycle-bin is enabled on your platform '
-            f'{ngc.conf["SERVER_URL"]}/admin/settings/#id_trash_enabled '
+            f'{msc.conf["SERVER_URL"]}/admin/settings/#id_trash_enabled '
             'Proceed ? [y / n]'
         )
         if answer.lower() not in ['yes', 'y']:
@@ -710,9 +1076,9 @@ def delete_old_medias(sys_args):
             args.html_email_template,
             args.plain_email_template,
         )
-        message, _context = _prepare_mail(
-            ngc,
-            sender=ngc.conf.get('SMTP_SENDER_EMAIL', 'your-smtp-account@example.com'),
+        message, _context, _details = _prepare_mail(
+            msc,
+            sender=msc.conf.get('SMTP_SENDER_EMAIL', 'your-smtp-account@example.com'),
             speaker_email=args.fallback_email,
             medias=DUMMY_MEDIAS,
             delete_date=delete_date,
@@ -723,8 +1089,31 @@ def delete_old_medias(sys_args):
         )
         logger.info(message)
     else:
-        medias = _get_medias(
-            ngc,
+        logger.info('Fetching catalog to list faculties...')
+        tree = msc.get_catalog(fmt='tree')
+        faculties = sorted(tree.get('channels', []), key=lambda ch: ch.get('title', ''))
+
+        print('\nAvailable faculties:')
+        print('  0. All faculties')
+        for i, ch in enumerate(faculties, 1):
+            print(f'  {i}. {ch["title"]}')
+
+        selection = input('\nSelect faculties to process (0 for all, or comma/space separated numbers): ').strip()
+
+        if not selection or selection == '0':
+            faculty_oids = None
+        else:
+            indices = [int(x) for x in re.split(r'[\s,]+', selection) if x.isdigit()]
+            invalid = [x for x in indices if not (1 <= x <= len(faculties))]
+            if invalid:
+                print(f'Invalid selection(s): {invalid}')
+                sys.exit(1)
+            faculty_oids = {faculties[i - 1]['oid'] for i in indices}
+            selected_titles = [faculties[i - 1]['title'] for i in indices]
+            print(f'\nProcessing: {", ".join(selected_titles)}')
+
+        medias, records, channels = _get_medias(
+            msc,
             added_after=added_after,
             added_before=added_before,
             views_max_count=views_max_count,
@@ -732,10 +1121,20 @@ def delete_old_medias(sys_args):
             views_after=views_after,
             views_before=views_before,
             skip_categories=skip_categories,
+            faculty_oids=faculty_oids,
         )
+        if args.media_report:
+            _generate_media_report(
+                channels,
+                records,
+                server_url=msc.conf['SERVER_URL'],
+                output_path=Path(args.media_report),
+                apply=args.apply,
+            )
+        report_data = None
         if delete_date > today or args.send_email_on_deletion:
-            _warn_speakers_about_deletion(
-                ngc,
+            report_data = _warn_speakers_about_deletion(
+                msc,
                 medias,
                 delete_date=delete_date,
                 skip_categories=skip_categories,
@@ -746,8 +1145,21 @@ def delete_old_medias(sys_args):
                 fallback_email=args.fallback_email,
                 apply=args.apply,
             )
+        if args.email_report and report_data is not None:
+            _generate_email_report(
+                report_data,
+                server_url=msc.conf['SERVER_URL'],
+                output_path=Path(args.email_report),
+                apply=args.apply,
+            )
+        if args.email_csv and report_data is not None:
+            _generate_email_csv(
+                report_data,
+                channels=channels,
+                output_path=Path(args.email_csv),
+            )
         if delete_date <= today:
-            _delete_medias(ngc, medias, apply=args.apply)
+            _delete_medias(msc, medias, apply=args.apply)
 
 
 if __name__ == '__main__':
