@@ -167,7 +167,7 @@ def _get_medias(
                 status = 'skip_added_before'
                 reason = f'added before {after_date_pp}'
                 logger.debug(f'{media_pp} was skipped because it was added before {after_date_pp}.')
-            elif views_max_count and media['oid'] not in unwatched:
+            elif views_max_count is not None and media['oid'] not in unwatched:
                 views_after_pp = views_after.strftime('%Y-%m-%d')
                 views_before_pp = views_before.strftime('%Y-%m-%d')
                 status = 'skip_views'
@@ -186,7 +186,7 @@ def _get_medias(
             else:
                 status = 'delete'
                 reason = 'selected for deletion'
-                if views_max_count:
+                if views_max_count is not None:
                     media['views_over_period'] = unwatched[media['oid']]
                     media['views_after'] = views_after.strftime('%Y-%m-%d')
                     media['views_before'] = views_before.strftime('%Y-%m-%d')
@@ -1047,7 +1047,7 @@ def delete_old_medias(sys_args):
     if args.views_before:
         views_before = datetime.strptime(args.views_before, '%Y-%m-%d').date()
 
-    if not any((views_max_count, added_after, added_before)):
+    if views_max_count is None and added_after is None and added_before is None:
         raise MisconfiguredError(
             'At least one filter ("--added-after", "--added-before", '
             '"--views-max-count") is required.'
