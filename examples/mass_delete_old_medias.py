@@ -124,6 +124,9 @@ def _get_medias(
     skip_categories: list[str] = (),
     faculty_oids: Optional[set] = None,
 ) -> list[dict]:
+    # Media categories are matched case-insensitively (see the lowercased set below),
+    # so normalize the skip list the same way to match values like "Niet verwijderen".
+    skip_categories = {cat.lower() for cat in skip_categories}
     catalog = msc.get_catalog('flat')
     channel_to_faculty = _build_channel_to_faculty_map(catalog['channels']) if faculty_oids else None
     unwatched = {}
