@@ -193,7 +193,7 @@ def _get_medias(
                     media['views_over_period'] = unwatched[media['oid']]
                     media['views_after'] = views_after.strftime('%Y-%m-%d')
                     media['views_before'] = views_before.strftime('%Y-%m-%d')
-                media['managers_emails'] = channels.get(media['parent_oid'], {}).get('managers_emails')
+                media['managers_emails'] = channels.get(media['parent_oid'], {}).get('managers_emails_raw')
                 selected_medias.append(media)
             records.append({
                 'oid': media['oid'],
@@ -368,7 +368,7 @@ def _warn_speakers_about_deletion(
 
     users = _get_users(msc)
     valid_emails = {
-        email: (user.get('speaker_id') or '').strip()
+        email.lower(): (user.get('speaker_id') or '').strip()
         for user in users
         if (email := (user.get('email') or '').strip()) and user['is_active']
     }
@@ -383,7 +383,7 @@ def _warn_speakers_about_deletion(
             for speaker_id in (media.get('speaker_id') or '').split('|')
         ]
         speakers_emails = [
-            speaker_email.strip()
+            speaker_email.strip().lower()
             for speaker_email in (media.get('speaker_email') or '').split('|')
         ]
         for speaker_id, speaker_email in zip_longest(speakers_ids, speakers_emails):
@@ -394,7 +394,7 @@ def _warn_speakers_about_deletion(
             elif fallback_to_channel_manager and media['managers_emails']:
                 for manager_email in media['managers_emails'].split('\n'):
                     manager_email = manager_email.strip(' \r\t').lower()
-                    if not manager_email.startswith('#') and manager_email in valid_emails:
+                    if manager_email and not manager_email.startswith('#') and manager_email in valid_emails:
                         recipients.append(manager_email)
 
         if not recipients:
