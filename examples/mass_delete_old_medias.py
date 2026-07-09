@@ -193,7 +193,7 @@ def _get_medias(
                     media['views_over_period'] = unwatched[media['oid']]
                     media['views_after'] = views_after.strftime('%Y-%m-%d')
                     media['views_before'] = views_before.strftime('%Y-%m-%d')
-                media['managers_emails'] = channels.get(media['parent_oid'], {}).get('managers_emails_raw')
+                media['managers_emails'] = channels.get(media['parent_oid'], {}).get('managers_emails')
                 selected_medias.append(media)
             records.append({
                 'oid': media['oid'],
