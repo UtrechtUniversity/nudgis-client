@@ -394,7 +394,7 @@ def _warn_speakers_about_deletion(
             elif fallback_to_channel_manager and media['managers_emails']:
                 for manager_email in media['managers_emails'].split('\n'):
                     manager_email = manager_email.strip(' \r\t').lower()
-                    if manager_email and not manager_email.startswith('#') and manager_email in valid_emails:
+                    if manager_email and not manager_email.startswith('#') # and manager_email in valid_emails:
                         recipients.append(manager_email)
 
         if not recipients:
