@@ -16,8 +16,9 @@ edition sub-channels.
 
 Sets managers_emails on each matched channel via channels/edit/.
 
-A report CSV is written with one row per channel processed (course + editions).
-Unmatched channels are recorded with an empty old/new email (no API call made).
+A report CSV is written with one row per course channel. Edition totals, updates,
+and errors are included as fields on the corresponding course row. Unmatched
+channels are recorded without a new email (no edit API call is made).
 '''
 import argparse
 import csv
@@ -70,7 +71,8 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
     '''
     Process one course channel and its edition sub-channels in a worker thread.
     Returns (row, course_updated: bool, course_already_correct: bool,
-             editions_updated: int, editions_already_correct: int).
+             course_error: bool, editions_updated: int,
+             editions_already_correct: int, edition_errors: int).
     One CSV row is produced per course channel; edition counts are included as fields.
     Old emails are read directly from the catalog data already in memory.
     '''
@@ -89,9 +91,10 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
             'new email': '',
             'editions': len(children_of.get(oid, [])),
             'updated': 0,
+            'errors': 0,
             'link': f'{server_url}/permalink/{oid}/',
         }
-        return row, False, False, 0, 0
+        return row, False, False, False, 0, 0, 0
 
     new_email = cursus_email[course_code]
     old_email = _catalog_email(channel)
@@ -99,18 +102,22 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
         if not dry_run:
             msc = _get_thread_client(conf_path)
             error = update_channel(msc, oid, new_email, dry_run)
-            match_value = 'error' if error else 'yes'
+            match_value = 'error' if error is not None else 'yes'
         else:
+            error = None
             match_value = 'yes'
-        course_updated = True
+        course_updated = error is None
         course_already_correct = False
+        course_error = error is not None
     else:
         match_value = 'correct'
         course_updated = False
         course_already_correct = True
+        course_error = False
 
     editions_updated = 0
     editions_already_correct = 0
+    edition_errors = 0
     for edition in children_of.get(oid, []):
         ed_oid = edition['oid']
         ed_old_email = _catalog_email(edition)
@@ -118,7 +125,12 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
             if not dry_run:
                 msc = _get_thread_client(conf_path)
                 ed_error = update_channel(msc, ed_oid, new_email, dry_run)
-            editions_updated += 1
+            else:
+                ed_error = None
+            if ed_error is not None:
+                edition_errors += 1
+            else:
+                editions_updated += 1
         else:
             editions_already_correct += 1
 
@@ -129,11 +141,20 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
         'code': course_code,
         'old email': old_email,
         'new email': new_email,
-        'editions': editions_updated + editions_already_correct,
+        'editions': editions_updated + editions_already_correct + edition_errors,
         'updated': editions_updated,
+        'errors': edition_errors,
         'link': f'{server_url}/permalink/{oid}/',
     }
-    return row, course_updated, course_already_correct, editions_updated, editions_already_correct
+    return (
+        row,
+        course_updated,
+        course_already_correct,
+        course_error,
+        editions_updated,
+        editions_already_correct,
+        edition_errors,
+    )
 
 
 if __name__ == '__main__':
@@ -250,7 +271,16 @@ if __name__ == '__main__':
     # -------------------------------------------------------------------------
     report_rows_by_idx = {}   # idx -> rows, to preserve catalog order in report
     faculty_stats = {
-        oid: {'title': ch.get('title', oid), 'c_updated': 0, 'c_correct': 0, 'c_unmatched': 0, 'ed_updated': 0, 'ed_correct': 0}
+        oid: {
+            'title': ch.get('title', oid),
+            'c_updated': 0,
+            'c_correct': 0,
+            'c_unmatched': 0,
+            'c_errors': 0,
+            'ed_updated': 0,
+            'ed_correct': 0,
+            'ed_errors': 0,
+        }
         for oid, ch in faculty_channels.items()
     }
     completed = 0
@@ -276,7 +306,7 @@ if __name__ == '__main__':
         }
         for future in as_completed(futures):
             idx = futures[future]
-            row, c_updated, c_correct, ed_updated, ed_correct = future.result()
+            row, c_updated, c_correct, c_error, ed_updated, ed_correct, ed_errors = future.result()
             faculty_oid = course_channels[idx].get('parent_oid')
             with lock:
                 report_rows_by_idx[idx] = row
@@ -285,10 +315,13 @@ if __name__ == '__main__':
                     s['c_updated'] += 1
                 elif c_correct:
                     s['c_correct'] += 1
+                elif c_error:
+                    s['c_errors'] += 1
                 else:
                     s['c_unmatched'] += 1
                 s['ed_updated'] += ed_updated
                 s['ed_correct'] += ed_correct
+                s['ed_errors'] += ed_errors
                 completed += 1
                 print(f'\r[{completed}/{total}]', end='', flush=True)
 
@@ -302,7 +335,18 @@ if __name__ == '__main__':
     # -------------------------------------------------------------------------
     # Write report CSV
     # -------------------------------------------------------------------------
-    fieldnames = ['Match', 'faculty', 'Course', 'code', 'editions', 'updated', 'old email', 'new email', 'link']
+    fieldnames = [
+        'Match',
+        'faculty',
+        'Course',
+        'code',
+        'editions',
+        'updated',
+        'errors',
+        'old email',
+        'new email',
+        'link',
+    ]
     with open(args.report, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -312,8 +356,15 @@ if __name__ == '__main__':
     summary_lines = []
     for s in sorted(faculty_stats.values(), key=lambda x: x['title']):
         summary_lines.append(s['title'])
-        summary_lines.append(f"  Courses  — {updated_label}: {s['c_updated']}, already correct: {s['c_correct']}, unmatched: {s['c_unmatched']}")
-        summary_lines.append(f"  Editions — {updated_label}: {s['ed_updated']}, already correct: {s['ed_correct']}")
+        summary_lines.append(
+            f"  Courses  — {updated_label}: {s['c_updated']}, "
+            f"already correct: {s['c_correct']}, unmatched: {s['c_unmatched']}, "
+            f"errors: {s['c_errors']}"
+        )
+        summary_lines.append(
+            f"  Editions — {updated_label}: {s['ed_updated']}, "
+            f"already correct: {s['ed_correct']}, errors: {s['ed_errors']}"
+        )
     summary_lines.append(f'\nReport written to: {args.report}')
     if not args.apply:
         summary_lines.append('(dry run — no changes were made)')
