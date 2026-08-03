@@ -25,7 +25,10 @@ with a specific four-digit year. Their combined teachers are copied to every
 edition outside that source year, including newer editions. A CSV report is
 written with one row per user/course combination that needed changes. In
 dry-run mode it contains the number of editions to be updated; in apply mode it
-contains the number successfully updated.
+contains the number successfully updated. Courses without any matching teacher
+are also included with a zero count and a "No match" comment. The course column
+uses the course code from the source-edition title instead of the full course
+name.
 '''
 from __future__ import annotations
 
@@ -65,7 +68,16 @@ TEACHER_PERMISSIONS = (
 
 RECYCLE_BIN_OID = 'c00000000000000trash'
 REPORT_COUNT_COLUMN = 'number of editions updated/to be updated'
-REPORT_FIELDNAMES = ('faculty', 'course', 'user', REPORT_COUNT_COLUMN)
+REPORT_COMMENT_COLUMN = 'comment'
+REPORT_FIELDNAMES = (
+    'faculty',
+    'course',
+    'user',
+    REPORT_COUNT_COLUMN,
+    REPORT_COMMENT_COLUMN,
+)
+NO_TEACHER_MATCH_COMMENT = 'No match'
+SOURCE_READ_ERROR_COMMENT = 'Source read error'
 _thread_local = threading.local()
 
 
@@ -85,6 +97,8 @@ class CourseResult:
     course_title: str
     latest_edition_title: str
     previous_editions: int
+    course_oid: str = ''
+    course_code: str = ''
     source_users: int = 0
     teachers: int = 0
     already_correct: int = 0
@@ -144,6 +158,23 @@ def _split_source_and_target_editions(
     source_oids = {edition['oid'] for edition in sources}
     targets = [edition for edition in ordered if edition['oid'] not in source_oids]
     return sources, targets
+
+
+def _get_course_code(course: dict, source_editions: list[dict]) -> str:
+    '''Extract the course code from a year-prefixed edition title, with a course-title fallback.'''
+    for edition in source_editions:
+        edition_title = (edition.get('title') or '').strip()
+        if re.match(r'^[0-9]{4}(?![0-9])', edition_title):
+            words = edition_title.split()
+            if len(words) > 1:
+                course_code = words[-1].strip(' ,;')
+                if course_code:
+                    return course_code
+
+    course_title_words = (course.get('title') or '').split()
+    if course_title_words:
+        return course_title_words[0].strip(' ,;')
+    return course['oid']
 
 
 def _permission_is_enabled(value) -> bool:
@@ -275,6 +306,8 @@ def _process_course(
         course_title=course.get('title') or course['oid'],
         latest_edition_title=source_label,
         previous_editions=len(targets),
+        course_oid=course['oid'],
+        course_code=_get_course_code(course, sources),
     )
 
     if not sources:
@@ -356,7 +389,7 @@ def _process_course(
         if teacher_updates_needed:
             result.changes.append(UserCourseChange(
                 faculty=result.faculty_title,
-                course=result.course_title,
+                course=result.course_code,
                 course_oid=course['oid'],
                 user=_user_label(teacher),
                 user_id=teacher['id'],
@@ -387,17 +420,29 @@ def _process_course_from_conf(
 
 
 def _write_report(results: list[CourseResult], report_path: Path) -> int:
-    '''Write one aggregate row per unique user/course pair.'''
+    '''Write change rows plus one explanatory row for each course without matches.'''
     rows_by_user_course = {}
     for result in results:
+        if result.teachers == 0 and not result.changes:
+            course_key = result.course_oid or f'{result.faculty_title}\0{result.course_title}'
+            rows_by_user_course[('course', course_key)] = {
+                'faculty': result.faculty_title,
+                'course': result.course_code or result.course_title,
+                'user': '',
+                REPORT_COUNT_COLUMN: 0,
+                REPORT_COMMENT_COLUMN: (
+                    SOURCE_READ_ERROR_COMMENT if result.errors else NO_TEACHER_MATCH_COMMENT
+                ),
+            }
         for change in result.changes:
-            key = (change.course_oid, change.user_id)
+            key = ('user', change.course_oid, change.user_id)
             if key not in rows_by_user_course:
                 rows_by_user_course[key] = {
                     'faculty': change.faculty,
                     'course': change.course,
                     'user': change.user,
                     REPORT_COUNT_COLUMN: 0,
+                    REPORT_COMMENT_COLUMN: '',
                 }
             rows_by_user_course[key][REPORT_COUNT_COLUMN] += change.editions
 
@@ -545,6 +590,8 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
                     course_title=course.get('title') or course['oid'],
                     latest_edition_title='',
                     previous_editions=0,
+                    course_oid=course['oid'],
+                    course_code=_get_course_code(course, []),
                     errors=[f'Unexpected processing error: {exc}'],
                 )
             results.append(result)
