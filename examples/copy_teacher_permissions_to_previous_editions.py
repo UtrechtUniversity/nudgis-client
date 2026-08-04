@@ -22,13 +22,13 @@ and all older editions are targets. Use --latest-by creation if edition
 creation time should decide which edition is the most recent instead.
 Alternatively, --source-edition can select all editions whose titles begin
 with a specific four-digit year. Their combined teachers are copied to every
-edition outside that source year, including newer editions. A CSV report is
-written with one row per user/course combination that needed changes. In
-dry-run mode it contains the number of editions to be updated; in apply mode it
-contains the number successfully updated. Courses without any matching teacher
-are also included with a zero count and a "No match" comment. The course column
-uses the course code from the source-edition title instead of the full course
-name.
+edition, including the source-year editions themselves and newer editions. A
+CSV report is written with one row per user/course combination that needed
+changes. In dry-run mode it contains the number of editions to be updated; in
+apply mode it contains the number successfully updated. Courses without any
+matching teacher are also included with a zero count and a "No match" comment.
+The course column uses the course code from the source-edition title instead of
+the full course name.
 '''
 from __future__ import annotations
 
@@ -155,9 +155,7 @@ def _split_source_and_target_editions(
         edition for edition in ordered
         if source_pattern.search(edition.get('title') or '')
     ]
-    source_oids = {edition['oid'] for edition in sources}
-    targets = [edition for edition in ordered if edition['oid'] not in source_oids]
-    return sources, targets
+    return sources, ordered
 
 
 def _get_course_code(course: dict, source_editions: list[dict]) -> str:
@@ -255,11 +253,11 @@ def _get_course_work(
             if len(editions) < 2:
                 continue
             if source_edition:
-                sources, targets = _split_source_and_target_editions(
+                sources, _ = _split_source_and_target_editions(
                     editions,
                     source_edition=source_edition,
                 )
-                if not sources or not targets:
+                if not sources:
                     continue
             work.append((faculty, course, editions))
     return sorted(
@@ -497,7 +495,8 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     parser.add_argument(
         '--source-edition',
         help='Use all editions whose titles begin with this four-digit year as '
-             'permission sources, and copy to every edition outside that year.',
+             'permission sources, and copy their combined teachers to every '
+             'edition, including the source editions.',
         type=_parse_source_edition,
     )
     parser.add_argument(
@@ -537,8 +536,8 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     if not work:
         if args.source_edition:
             logger.info(
-                f'No selected courses have both a {args.source_edition} source edition '
-                'and another target edition. Nothing to do.'
+                f'No selected courses with at least two editions have a '
+                f'{args.source_edition} source edition. Nothing to do.'
             )
         else:
             logger.info('No selected courses have at least two editions. Nothing to do.')
@@ -548,7 +547,7 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     if args.source_edition:
         logger.info(
             f'Found {len(work)} course(s) with {args.source_edition} source editions '
-            'and at least one edition outside that year.'
+            'and at least two total editions. Every edition will be a target.'
         )
     else:
         logger.info(
