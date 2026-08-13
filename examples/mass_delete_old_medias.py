@@ -786,6 +786,73 @@ def _generate_email_csv(
     logger.info(f'Wrote email CSV ({len(sorted_rows)} rows) to {output_path}.')
 
 
+def _generate_media_csv(
+    channels: list[dict],
+    records: list[dict],
+    server_url: str,
+    output_path: Path,
+):
+    '''Write deletion candidates grouped by faculty, course, and edition.'''
+    channels_by_oid = {channel['oid']: channel for channel in channels}
+
+    def channel_path(oid: Optional[str]) -> list[dict]:
+        path = []
+        visited = set()
+        while oid in channels_by_oid and oid not in visited:
+            visited.add(oid)
+            channel = channels_by_oid[oid]
+            path.append(channel)
+            oid = channel.get('parent_oid')
+        return list(reversed(path))
+
+    permalink_url = server_url.rstrip('/') + '/permalink/'
+    rows = {}
+    for record in records:
+        if record['status'] != 'delete':
+            continue
+
+        path = channel_path(record.get('parent_oid'))
+        faculty = path[0] if len(path) > 0 else None
+        course = path[1] if len(path) > 1 else None
+        edition = path[2] if len(path) > 2 else None
+        key = tuple(channel['oid'] if channel else '' for channel in (faculty, course, edition))
+        row = rows.setdefault(key, {
+            'Faculty': faculty.get('title', '') if faculty else '',
+            'Course Name': course.get('title', '') if course else '',
+            'Link to course': f'{permalink_url}{course["oid"]}/' if course else '',
+            'Edition Name': edition.get('title', '') if edition else '',
+            'Link to Course Edition': f'{permalink_url}{edition["oid"]}/' if edition else '',
+            'Medias Deleted': [],
+        })
+        row['Medias Deleted'].append(record.get('title') or record['oid'])
+
+    fieldnames = [
+        'Faculty',
+        'Course Name',
+        'Link to course',
+        'Edition Name',
+        'Link to Course Edition',
+        'Medias Deleted',
+    ]
+    sorted_rows = sorted(
+        rows.values(),
+        key=lambda row: (
+            row['Faculty'].casefold(),
+            row['Course Name'].casefold(),
+            row['Edition Name'].casefold(),
+        ),
+    )
+    with output_path.open('w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted_rows:
+            writer.writerow({
+                **row,
+                'Medias Deleted': '\n'.join(sorted(row['Medias Deleted'], key=str.casefold)),
+            })
+    logger.info(f'Wrote media CSV ({len(sorted_rows)} rows) to {output_path}.')
+
+
 def delete_old_medias(sys_args):
     parser = argparse.ArgumentParser(
         'mass_delete_old_medias',
@@ -974,6 +1041,16 @@ def delete_old_medias(sys_args):
         default=None,
     )
     parser.add_argument(
+        '--media-csv',
+        help='Path of the CSV media-deletion report to write. The report has '
+             'one row per course edition and stores all media selected for '
+             'deletion in a single, newline-separated cell. Defaults to '
+             '"./media_report_<hostname>_<timestamp>.csv". '
+             'Pass an empty string to disable.',
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
         '--email-report',
         help='Path of the HTML email-notifications report to write. '
              'The report is a collapsible tree of recipients with their '
@@ -1013,6 +1090,8 @@ def delete_old_medias(sys_args):
     timestamp_slug = datetime.now().strftime('%Y%m%dT%H%M%S')
     if args.media_report is None:
         args.media_report = f'./media_report_{hostname_slug}_{timestamp_slug}.html'
+    if args.media_csv is None:
+        args.media_csv = f'./media_report_{hostname_slug}_{timestamp_slug}.csv'
     if args.email_report is None:
         args.email_report = f'./email_report_{hostname_slug}_{timestamp_slug}.html'
     if args.email_csv is None:
@@ -1133,6 +1212,13 @@ def delete_old_medias(sys_args):
                 server_url=msc.conf['SERVER_URL'],
                 output_path=Path(args.media_report),
                 apply=args.apply,
+            )
+        if args.media_csv:
+            _generate_media_csv(
+                channels,
+                records,
+                server_url=msc.conf['SERVER_URL'],
+                output_path=Path(args.media_csv),
             )
         report_data = None
         if delete_date > today or args.send_email_on_deletion:
