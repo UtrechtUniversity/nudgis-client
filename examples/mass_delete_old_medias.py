@@ -306,13 +306,13 @@ def _get_templates(
     plain_email_template: Path,
 ):
     try:
-        html_template = html_email_template.read_text()
+        html_template = html_email_template.read_text(encoding='utf-8')
         html_is_custom = True
     except FileNotFoundError:
         html_template = DEFAULT_HTML_EMAIL_TEMPLATE
         html_is_custom = False
     try:
-        plain_template = plain_email_template.read_text()
+        plain_template = plain_email_template.read_text(encoding='utf-8')
         plain_is_custom = True
     except FileNotFoundError:
         plain_template = DEFAULT_PLAIN_EMAIL_TEMPLATE
