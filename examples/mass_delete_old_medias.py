@@ -848,7 +848,7 @@ def _generate_media_csv(
         for row in sorted_rows:
             writer.writerow({
                 **row,
-                'Medias Deleted': '\n'.join(sorted(row['Medias Deleted'], key=str.casefold)),
+                'Medias Deleted': ' | '.join(sorted(row['Medias Deleted'], key=str.casefold)),
             })
     logger.info(f'Wrote media CSV ({len(sorted_rows)} rows) to {output_path}.')
 
@@ -1044,7 +1044,7 @@ def delete_old_medias(sys_args):
         '--media-csv',
         help='Path of the CSV media-deletion report to write. The report has '
              'one row per course edition and stores all media selected for '
-             'deletion in a single, newline-separated cell. Defaults to '
+             'deletion in a single, pipe-separated cell. Defaults to '
              '"./media_report_<hostname>_<timestamp>.csv". '
              'Pass an empty string to disable.',
         type=str,
