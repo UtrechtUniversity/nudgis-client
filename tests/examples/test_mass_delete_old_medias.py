@@ -1,11 +1,20 @@
+import csv
+import smtplib
 from collections import namedtuple
 from datetime import date, timedelta
-import smtplib
 from unittest import mock
 
 import pytest
 
-from examples.mass_delete_old_medias import delete_old_medias, MisconfiguredError
+
+from examples.mass_delete_old_medias import (
+    _generate_media_csv,
+    _get_templates,
+    _warn_speakers_about_deletion,
+    delete_old_medias,
+    MisconfiguredError,
+)
+
 
 TODAY = date.today()
 TOMORROW = TODAY + timedelta(days=1)
@@ -187,16 +196,16 @@ def api_client(catalog, users):
             else:
                 return {'users': []}
 
-    from nudgisclient import NudgisClient
+    from ms_client.client import MediaServerClient
 
-    client = NudgisClient()
+    client = MediaServerClient()
     client._server_version = (12, 3, 0)
     client.conf['SMTP_SERVER'] = 'smtp.example.com'
     client.conf['SMTP_LOGIN'] = 'sender'
     client.conf['SMTP_PASSWORD'] = 's3cr3t'
     client.conf['SMTP_SENDER_EMAIL'] = 'sender@example.com'
     client.api = mock.MagicMock(side_effect=mock_api_call)
-    with mock.patch('examples.mass_delete_old_medias.NudgisClient', return_value=client):
+    with mock.patch('examples.mass_delete_old_medias.MediaServerClient', return_value=client):
         yield client
 
 
@@ -205,6 +214,8 @@ Message = namedtuple('Message', ['sender', 'recipient', 'message'])
 
 class MockSMTP:
     def __init__(self):
+        self.factory = None
+        self._tls_started = False
         self._logged_in = False
         self.mailbox: list[Message] = []
 
@@ -214,7 +225,12 @@ class MockSMTP:
     def __exit__(self, _exc_type, _exc_val, _exc_tb):
         pass
 
+    def starttls(self, *, context):
+        assert context is not None
+        self._tls_started = True
+
     def login(self, sender, password):
+        assert self._tls_started
         assert sender == 'sender'
         assert password == 's3cr3t'
         self._logged_in = True
@@ -239,8 +255,27 @@ class MockSMTP:
 @pytest.fixture()
 def mock_smtp():
     mock_smtp = MockSMTP()
-    with mock.patch('smtplib.SMTP_SSL', autospec=True, return_value=mock_smtp):
+    with mock.patch('smtplib.SMTP', autospec=True, return_value=mock_smtp) as factory:
+        mock_smtp.factory = factory
         yield mock_smtp
+
+
+def test_smtp_uses_starttls_on_port_587(api_client, catalog, mock_smtp, tmp_path):
+    _warn_speakers_about_deletion(
+        api_client,
+        medias=[catalog['videos'][0]],
+        delete_date=IN_A_MONTH,
+        skip_categories=['do not delete'],
+        html_email_template=tmp_path / 'missing.html',
+        plain_email_template=tmp_path / 'missing.txt',
+        email_subject_template='Deletion warning for {platform_hostname}',
+        fallback_to_channel_manager=False,
+        fallback_email='fallback@example.com',
+        apply=True,
+    )
+
+    mock_smtp.factory.assert_called_once_with('smtp.example.com', 587)
+    assert mock_smtp._tls_started
 
 
 @pytest.mark.parametrize(
@@ -304,6 +339,10 @@ def test_delete_old_medias__full_workflow(
     assert len(mock_smtp.mailbox) == len(expected_sent_mails)
     for recipient, oids in expected_sent_mails:
         assert mock_smtp.has_mail('sender@example.com', recipient, oids)
+    if expected_sent_mails:
+        mock_smtp.factory.assert_called_once_with('smtp.example.com', 587)
+    else:
+        mock_smtp.factory.assert_not_called()
 
     # Check api calls and deleted oids
     assert api_client.api.call_count == 2 if expected_deleted_oids else 1
@@ -535,3 +574,71 @@ def test_delete_old_medias__misconfigured(
 
     with pytest.raises(MisconfiguredError):
         delete_old_medias(params)
+
+
+def test_generate_media_csv_groups_deleted_medias_in_one_cell(tmp_path):
+    channels = [
+        {'oid': 'faculty', 'title': 'Faculty'},
+        {'oid': 'course', 'title': 'Course', 'parent_oid': 'faculty'},
+        {'oid': 'edition', 'title': '2025', 'parent_oid': 'course'},
+    ]
+    records = [
+        {
+            'oid': 'media-b',
+            'title': 'Media B',
+            'parent_oid': 'edition',
+            'status': 'delete',
+        },
+        {
+            'oid': 'media-skipped',
+            'title': 'Skipped Media',
+            'parent_oid': 'edition',
+            'status': 'skip_categories',
+        },
+        {
+            'oid': 'media-a',
+            'title': 'Media A',
+            'parent_oid': 'edition',
+            'status': 'delete',
+        },
+    ]
+    output_path = tmp_path / 'media_report.csv'
+
+    _generate_media_csv(
+        channels,
+        records,
+        server_url='https://video.example/',
+        output_path=output_path,
+    )
+
+    assert len(output_path.read_text(encoding='utf-8').splitlines()) == 2
+    with output_path.open(encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f)
+        assert reader.fieldnames == [
+            'Faculty',
+            'Course Name',
+            'Link to course',
+            'Edition Name',
+            'Link to Course Edition',
+            'Medias Deleted',
+        ]
+        assert list(reader) == [{
+            'Faculty': 'Faculty',
+            'Course Name': 'Course',
+            'Link to course': 'https://video.example/permalink/course/',
+            'Edition Name': '2025',
+            'Link to Course Edition': 'https://video.example/permalink/edition/',
+            'Medias Deleted': 'Media A | Media B',
+        }]
+
+
+def test_get_templates_reads_custom_templates_as_utf8(tmp_path):
+    html_path = tmp_path / 'email.html'
+    plain_path = tmp_path / 'email.txt'
+    html_path.write_text('<p>⚠️ Eén waarschuwing</p>', encoding='utf-8')
+    plain_path.write_text('⚠️ Eén waarschuwing', encoding='utf-8')
+
+    html_template, plain_template = _get_templates(html_path, plain_path)
+
+    assert html_template == '<p>⚠️ Eén waarschuwing</p>'
+    assert plain_template == '⚠️ Eén waarschuwing'

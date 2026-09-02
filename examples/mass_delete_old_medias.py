@@ -419,7 +419,7 @@ def _warn_speakers_about_deletion(
 
     if apply:
         ssl_context = ssl.create_default_context()
-        smtp_ctx_manager = smtplib.SMTP_SSL(smtp_server, 465, context=ssl_context)
+        smtp_ctx_manager = smtplib.SMTP(smtp_server, 587)
     else:
         smtp_ctx_manager = nullcontext()
 
@@ -427,6 +427,7 @@ def _warn_speakers_about_deletion(
     sent_count = 0
     with smtp_ctx_manager as smtp:
         if apply:
+            smtp.starttls(context=ssl_context)
             smtp.login(smtp_login, smtp_password)
         for recipient, (message, context, media_details) in to_send.items():
             try:
