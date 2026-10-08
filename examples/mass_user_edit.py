@@ -13,7 +13,7 @@ import argparse
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -54,9 +54,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
     # ping
-    print(msc.api('/'))
+    print(ngc.api('/'))
 
     with open(args.csv, 'r') as f:
         csv_data = f.read().strip()
@@ -78,7 +78,7 @@ if __name__ == '__main__':
                 try:
                     print(f'{prefix}[{index + 1}/{total_lines}] About to edit {user_email}')
                     if args.apply:
-                        msc.api('users/edit/', method='post', data=data)
+                        ngc.api('users/edit/', method='post', data=data)
                     count += 1
                 except Exception as e:
                     print(f'Error on {user_email}: {e}')

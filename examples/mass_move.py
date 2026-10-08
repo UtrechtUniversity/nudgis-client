@@ -10,7 +10,7 @@ import sys
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -27,9 +27,9 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
     # ping
-    print(msc.api('/'))
+    print(ngc.api('/'))
 
     more = True
     start = ''
@@ -40,17 +40,17 @@ if __name__ == '__main__':
 
     while more:
         print('//// Making request on latest (start=%s)' % start)
-        response = msc.api('latest/', params={'start': start, 'content': 'v', 'count': 20})
+        response = ngc.api('latest/', params={'start': start, 'content': 'v', 'count': 20})
         for item in response['items']:
             oid = item['oid']
             index += 1
             print('// Media %s' % index)
-            external_ref = msc.api('medias/get/', params={'oid': oid, 'full': 'yes'})['info'].get('external_ref')
+            external_ref = ngc.api('medias/get/', params={'oid': oid, 'full': 'yes'})['info'].get('external_ref')
             if external_ref:
                 if external_ref.startswith(external_ref_prefix) and item['parent_oid'] != target_channel_oid:
                     prefix = '' if args.apply else '[DRY RUN] '
                     print(f'{prefix}Moving {oid} into {target_channel_oid}')
                     if args.apply:
-                        msc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
+                        ngc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
         start = response['max_date']
         more = response['more']

@@ -20,9 +20,11 @@ import sys
 def empty_channels_iterator(
     channel_info,
     channel_oid_blacklist=(),
-    max_date=date.today(),
+    max_date=None,
     min_depth=0,
 ):
+    if max_date is None:
+        max_date = date.today()
     for channel in channel_info.get('channels', ()):
         channel['path'] = list(channel_info.get('path', [])) + [channel['title']]
         skip_channel = (
@@ -53,11 +55,11 @@ def clean_tree(tree, deleted_oids):
             clean_tree(channel, deleted_oids)
 
 
-def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300):
+def delete_empty_channels(ngc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300):
     if tree is None:
-        tree = msc.get_catalog(fmt='tree')
+        tree = ngc.get_catalog(fmt='tree')
     channel_oid_blacklist = list(channel_oid_blacklist)
-    ms_url = msc.conf['SERVER_URL'].rstrip('/') + '/permalink/'
+    ms_url = ngc.conf['SERVER_URL'].rstrip('/') + '/permalink/'
     report_rows = []
 
     if faculty_oids:
@@ -76,7 +78,7 @@ def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply
             break
         empty_by_oid = {ch['oid']: ch for ch in empty_channels}
         if apply:
-            response = msc.api(
+            response = ngc.api(
                 'catalog/bulk_delete/',
                 method='post',
                 data=dict(oids=list(empty_by_oid)),
@@ -108,7 +110,7 @@ def delete_empty_channels(msc, channel_oid_blacklist, max_date, min_depth, apply
 
 def main():
     sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -175,15 +177,15 @@ def main():
         print('Incorrect data format, should be "YYYY-MM-DD".')
         return 1
 
-    msc = MediaServerClient(args.configuration)
-    msc.check_server()
+    ngc = NudgisClient(args.configuration)
+    ngc.check_server()
 
     # Check channel oid
     if args.exclude_oid:
         for oid_blacklist in args.exclude_oid:
             # Check if channel oid exists
             try:
-                msc.api('channels/get/', method='get', params=dict(oid=oid_blacklist))
+                ngc.api('channels/get/', method='get', params=dict(oid=oid_blacklist))
             except Exception as e:
                 print(
                     f'Please enter valid channel oid {oid_blacklist} or check access permissions.'
@@ -194,7 +196,7 @@ def main():
         args.exclude_oid = []
 
     print('Fetching catalog...')
-    tree = msc.get_catalog(fmt='tree')
+    tree = ngc.get_catalog(fmt='tree')
     faculties = sorted(tree.get('channels', []), key=lambda ch: ch.get('title', ''))
 
     print('\nAvailable faculties:')
@@ -216,7 +218,7 @@ def main():
         selected_titles = [faculties[i - 1]['title'] for i in indices]
         print(f'\nProcessing: {", ".join(selected_titles)}')
 
-    report_rows = delete_empty_channels(msc, args.exclude_oid, max_date, args.min_depth, args.apply, faculty_oids=faculty_oids, tree=tree, timeout=args.timeout)
+    report_rows = delete_empty_channels(ngc, args.exclude_oid, max_date, args.min_depth, args.apply, faculty_oids=faculty_oids, tree=tree, timeout=args.timeout)
 
     if report_rows:
         faculty_counts = {}

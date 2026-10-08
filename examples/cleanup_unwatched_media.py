@@ -16,10 +16,10 @@ import sys
 import time
 
 try:
-    from ms_client.client import MediaServerClient, MediaServerRequestError
+    from nudgisclient.client import NudgisClient, NudgisRequestError
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient, MediaServerRequestError
+    from nudgisclient.client import NudgisClient, NudgisRequestError
 
 
 REPORT_FIELDS = [
@@ -65,12 +65,12 @@ def media_is_deletable(resources: list[dict]) -> bool:
             return True
 
 
-def query_deletable_unwatched_vods(msc: MediaServerClient, params: dict) -> list[dict]:
+def query_deletable_unwatched_vods(ngc: NudgisClient, params: dict) -> list[dict]:
     """Use API to get unwatched media between dates, filter on deletable vod media, and
     finally query and insert resources information
     """
     print(f"Fetching unwatched media with options {params}")
-    r = msc.api("/stats/unwatched/", params=params)
+    r = ngc.api("/stats/unwatched/", params=params)
 
     # only look at VOD
     unwatched_vods = filter_vod(r.get("unwatched", []))
@@ -80,7 +80,7 @@ def query_deletable_unwatched_vods(msc: MediaServerClient, params: dict) -> list
     for index, vod in enumerate(unwatched_vods):
         print(f"Looking at VOD {index + 1}/{len(unwatched_vods)}", end="\r")
         oid = vod["object_id"]
-        resources = msc.api("/medias/resources-list/", params={"oid": oid})["resources"]
+        resources = ngc.api("/medias/resources-list/", params={"oid": oid})["resources"]
         if media_is_deletable(resources):
             vod["resources"] = resources
             unwatched_local_media.append(vod)
@@ -120,7 +120,7 @@ def get_hls_resources(vods: list[dict]) -> [dict, int]:
 
 
 def delete_hls_resources(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     vods: list[dict],
     apply: bool = False,
     report_path: Path | str | None = None,
@@ -146,8 +146,8 @@ def delete_hls_resources(
                 print(f"Deleting resources of oid {oid}: {files}")
                 params = {"oid": oid, "names": ",".join(files)}
                 try:
-                    r = msc.api("/medias/resources-delete/", method="post", data=params, timeout=180)
-                except MediaServerRequestError as err:
+                    r = ngc.api("/medias/resources-delete/", method="post", data=params, timeout=180)
+                except NudgisRequestError as err:
                     if 'read timeout=' in str(err):
                         print(f'The deletion request timed out for "{oid}", this error can be ignored.')
                         deleted_resources_count += len(files)
@@ -197,7 +197,7 @@ def delete_hls_resources(
 
 
 def delete_unwatched_vods(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     vods: list[dict],
     apply: bool = False,
     report_path: Path | str | None = None,
@@ -219,7 +219,7 @@ def delete_unwatched_vods(
         if apply:
             trashed_files_log_path = f"{time.strftime('%Y%m%d-%H%M%S')}-trashed.csv"
             print(f"Will put {media_to_delete_count} VODs to trash")
-            deleted_statuses = msc.api(
+            deleted_statuses = ngc.api(
                 "/catalog/bulk_delete/", method="post", data={"oids": oids}
             )["statuses"]
 
@@ -337,7 +337,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
 
     params = dict()
 
@@ -351,16 +351,16 @@ if __name__ == "__main__":
 
     params["views_threshold"] = args.max_views
 
-    vods = query_deletable_unwatched_vods(msc, params)
+    vods = query_deletable_unwatched_vods(ngc, params)
 
     action = args.action
     if action == "reduce_size":
-        delete_hls_resources(msc, vods, apply=args.apply, report_path=args.report)
+        delete_hls_resources(ngc, vods, apply=args.apply, report_path=args.report)
     elif action == "trash":
         yesno = input(
             "WARNING: TRIPLE CHECK THAT YOUR PLATFORM HAS THE TRASH ENABLED "
-            f"here {msc.conf['SERVER_URL']}/admin/settings/#id_trash_enabled (type 'yes')"
+            f"here {ngc.conf['SERVER_URL']}/admin/settings/#id_trash_enabled (type 'yes')"
         )
         if yesno.lower() != "yes":
             sys.exit()
-        delete_unwatched_vods(msc, vods, apply=args.apply, report_path=args.report)
+        delete_unwatched_vods(ngc, vods, apply=args.apply, report_path=args.report)

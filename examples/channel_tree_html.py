@@ -342,12 +342,12 @@ def _escape(text):
     )
 
 
-def generate_html(msc, output_path):
+def generate_html(ngc, output_path):
     from datetime import datetime
 
-    server_url = msc.conf['SERVER_URL'].rstrip('/')
+    server_url = ngc.conf['SERVER_URL'].rstrip('/')
     print('Fetching catalog (this may take a while for large platforms)...')
-    tree = msc.get_catalog(fmt='tree')
+    tree = ngc.get_catalog(fmt='tree')
 
     top_channels = tree.get('channels', [])
     print(f'Got {len(top_channels)} top-level channel(s), building tree...')
@@ -389,7 +389,7 @@ def generate_html(msc, output_path):
 
 if __name__ == '__main__':
     sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -412,12 +412,12 @@ if __name__ == '__main__':
         print('Invalid path for configuration file.')
         sys.exit(1)
 
-    msc = MediaServerClient(args.configuration)
-    msc.check_server()
+    ngc = NudgisClient(args.configuration)
+    ngc.check_server()
 
     output = args.output
     if output is None:
-        host = msc.conf['SERVER_URL'].split('://')[-1].rstrip('/')
+        host = ngc.conf['SERVER_URL'].split('://')[-1].rstrip('/')
         output = f'channel-tree-{host}.html'
 
-    generate_html(msc, output)
+    generate_html(ngc, output)

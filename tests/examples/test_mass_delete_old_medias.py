@@ -199,16 +199,16 @@ def api_client(catalog, users):
             else:
                 return {'users': []}
 
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
-    client = MediaServerClient()
+    client = NudgisClient()
     client._server_version = (12, 3, 0)
     client.conf['SMTP_SERVER'] = 'smtp.example.com'
     client.conf['SMTP_LOGIN'] = 'sender'
     client.conf['SMTP_PASSWORD'] = 's3cr3t'
     client.conf['SMTP_SENDER_EMAIL'] = 'sender@example.com'
     client.api = mock.MagicMock(side_effect=mock_api_call)
-    with mock.patch('examples.mass_delete_old_medias.MediaServerClient', return_value=client):
+    with mock.patch('examples.mass_delete_old_medias.NudgisClient', return_value=client):
         yield client
 
 

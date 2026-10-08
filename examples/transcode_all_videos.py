@@ -16,10 +16,10 @@ import os
 import sys
 
 
-def transcode_all_videos(msc, purge, apply):
+def transcode_all_videos(ngc, purge, apply):
     non_transcodable = failed = succeeded = 0
 
-    videos = msc.get_catalog(fmt='flat').get('videos', [])
+    videos = ngc.get_catalog(fmt='flat').get('videos', [])
     videos_count = len(videos)
     prefix = '' if apply else '[DRY RUN] '
     for index, item in enumerate(videos):
@@ -31,7 +31,7 @@ def transcode_all_videos(msc, purge, apply):
 
             print(f'{prefix}Starting transcoding task on {item["oid"]}')
             if apply:
-                msc.api(
+                ngc.api(
                     'tasks/start/',
                     method='post',
                     data=dict(
@@ -41,7 +41,7 @@ def transcode_all_videos(msc, purge, apply):
                     ),
                     timeout=300,
                 )
-        except msc.RequestError as e:
+        except ngc.RequestError as e:
             if 'has no usable ressources' in str(e):
                 non_transcodable += 1
             else:
@@ -57,7 +57,7 @@ def transcode_all_videos(msc, purge, apply):
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -76,6 +76,6 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    msc = MediaServerClient(args.conf)
-    msc.check_server()
-    transcode_all_videos(msc, args.purge, args.apply)
+    ngc = NudgisClient(args.conf)
+    ngc.check_server()
+    transcode_all_videos(ngc, args.purge, args.apply)

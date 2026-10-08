@@ -25,11 +25,11 @@ from typing import Optional
 from urllib.parse import urlparse
 
 try:
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
-from ms_client.lib.utils import format_bytes, format_timedelta
+    from nudgisclient.client import NudgisClient
+from nudgisclient.lib.utils import format_bytes, format_timedelta
 
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def _build_channel_to_faculty_map(channels: list[dict]) -> dict[str, str]:
 
 
 def _get_medias(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     added_after: Optional[date] = None,
     added_before: Optional[date] = None,
     views_max_count: Optional[int] = None,
@@ -126,13 +126,13 @@ def _get_medias(
     # Media categories are matched case-insensitively (see the lowercased set below),
     # so normalize the skip list the same way to match values like "Niet verwijderen".
     skip_categories = {cat.lower() for cat in skip_categories}
-    catalog = msc.get_catalog('flat')
+    catalog = ngc.get_catalog('flat')
     channel_to_faculty = _build_channel_to_faculty_map(catalog['channels']) if faculty_oids else None
     unwatched = {}
     if views_max_count is not None:
         unwatched = {
             unwatched['object_id']: unwatched['views_over_period']
-            for unwatched in msc.api(
+            for unwatched in ngc.api(
                 'stats/unwatched/',
                 params={
                     'playback_threshold': views_playback_threshold,
@@ -212,19 +212,19 @@ def _get_medias(
     return selected_medias, records, catalog['channels']
 
 
-def _get_users(msc: MediaServerClient, page_size=500):
+def _get_users(ngc: NudgisClient, page_size=500):
     users = []
     offset = 0
-    response = msc.api('users/', params={'limit': page_size, 'offset': offset})
+    response = ngc.api('users/', params={'limit': page_size, 'offset': offset})
     while response['users']:
         users += response['users']
         offset += page_size
-        response = msc.api('users/', params={'limit': page_size, 'offset': offset})
+        response = ngc.api('users/', params={'limit': page_size, 'offset': offset})
     return users
 
 
 def _prepare_mail(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     sender: str,
     speaker_email: str,
     medias: list[dict],
@@ -237,14 +237,14 @@ def _prepare_mail(
     # Ensure each media is only once in the list.
     medias = list({media['oid']: media for media in medias}.values())
 
-    ms_perma_url = msc.conf['SERVER_URL'] + '/permalink/'
-    ms_edit_url = msc.conf['SERVER_URL'] + '/edit/iframe/'
+    ms_perma_url = ngc.conf['SERVER_URL'] + '/permalink/'
+    ms_edit_url = ngc.conf['SERVER_URL'] + '/edit/'
     context = {
         'media_count': len(medias),
         'media_size_pp': format_bytes(sum(media['storage_used'] for media in medias)),
         'delete_date': delete_date.strftime('%B %d, %Y'),
         'skip_categories': ' | '.join(f'"{cat}"' for cat in skip_categories),
-        'platform_hostname': urlparse(msc.conf['SERVER_URL']).netloc,
+        'platform_hostname': urlparse(ngc.conf['SERVER_URL']).netloc,
     }
     message = MIMEMultipart('alternative')
     message['Subject'] = email_subject_template.format(**context)
@@ -262,7 +262,7 @@ def _prepare_mail(
             'title': media['title'],
             'add_date': media_add_date.strftime('%Y-%m-%d'),
             'age': format_timedelta(now - media_add_date),
-            'view_url': f'{ms_perma_url}{media["oid"]}/iframe/',
+            'view_url': f'{ms_perma_url}{media["oid"]}/',
             'edit_url': f'{ms_edit_url}{media["oid"]}/#id_categories',
         }
         if 'views_over_period' in media:
@@ -357,7 +357,7 @@ def _is_smtp_connection_failure(error: OSError) -> bool:
 
 
 def _warn_speakers_about_deletion(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     medias: list[dict],
     delete_date: date,
     skip_categories: list[str],
@@ -368,16 +368,16 @@ def _warn_speakers_about_deletion(
     fallback_email: str,
     apply: bool = False,
 ):
-    smtp_server = msc.conf.get('SMTP_SERVER')
-    smtp_login = msc.conf.get('SMTP_LOGIN')
-    smtp_password = msc.conf.get('SMTP_PASSWORD')
-    smtp_email = msc.conf.get('SMTP_SENDER_EMAIL')
+    smtp_server = ngc.conf.get('SMTP_SERVER')
+    smtp_login = ngc.conf.get('SMTP_LOGIN')
+    smtp_password = ngc.conf.get('SMTP_PASSWORD')
+    smtp_email = ngc.conf.get('SMTP_SENDER_EMAIL')
     if not (smtp_server and smtp_login and smtp_password and smtp_email):
         smtp_password = '*' * len(smtp_password)
         raise MisconfiguredError(f'{smtp_server=} / {smtp_login=} / {smtp_password=} / {smtp_email=}')
     html_template, plain_template = _get_templates(html_email_template, plain_email_template)
 
-    users = _get_users(msc)
+    users = _get_users(ngc)
     valid_emails = {
         email.lower(): (user.get('speaker_id') or '').strip()
         for user in users
@@ -416,7 +416,7 @@ def _warn_speakers_about_deletion(
 
     to_send = {
         speaker_email: _prepare_mail(
-            msc,
+            ngc,
             sender=smtp_email,
             speaker_email=speaker_email,
             medias=speaker_medias,
@@ -511,7 +511,7 @@ def _warn_speakers_about_deletion(
                 to_fallback += medias_per_speaker[recipient]
         if to_fallback:
             fallback_mail = _prepare_mail(
-                msc,
+                ngc,
                 sender=smtp_email,
                 speaker_email=fallback_email,
                 medias=to_fallback,
@@ -531,8 +531,8 @@ def _warn_speakers_about_deletion(
     return report_data
 
 
-def _delete_medias(msc: MediaServerClient, medias: list[dict], apply: bool = False):
-    ms_url = msc.conf['SERVER_URL'] + '/permalink/'
+def _delete_medias(ngc: NudgisClient, medias: list[dict], apply: bool = False):
+    ms_url = ngc.conf['SERVER_URL'] + '/permalink/'
     medias = {media['oid']: media for media in medias}
     if not medias:
         logger.info('No media to delete.')
@@ -540,7 +540,7 @@ def _delete_medias(msc: MediaServerClient, medias: list[dict], apply: bool = Fal
     deleted_count = 0
     deleted_size = 0
     if apply:
-        response = msc.api(
+        response = ngc.api(
             'catalog/bulk_delete/',
             method='post',
             data=dict(oids=list(medias.keys()))
@@ -1183,10 +1183,10 @@ def delete_old_medias(sys_args):
     logging.basicConfig()
     logger.setLevel(args.log_level.upper())
 
-    msc = MediaServerClient(args.conf)
-    msc.conf['TIMEOUT'] = max(600, msc.conf['TIMEOUT'])
+    ngc = NudgisClient(args.conf)
+    ngc.conf['TIMEOUT'] = max(600, ngc.conf['TIMEOUT'])
 
-    hostname_slug = urlparse(msc.conf['SERVER_URL']).netloc.replace('.', '_')
+    hostname_slug = urlparse(ngc.conf['SERVER_URL']).netloc.replace('.', '_')
     timestamp_slug = datetime.now().strftime('%Y%m%dT%H%M%S')
     if args.media_report is None:
         args.media_report = f'./media_report_{hostname_slug}_{timestamp_slug}.html'
@@ -1202,7 +1202,7 @@ def delete_old_medias(sys_args):
             'The script is running in normal mode. '
             'Emails will be sent, medias will be deleted.\n'
             'Please ensure that the recycle-bin is enabled on your platform '
-            f'{msc.conf["SERVER_URL"]}/admin/settings/#id_trash_enabled '
+            f'{ngc.conf["SERVER_URL"]}/admin/settings/#id_trash_enabled '
             'Proceed ? [y / n]'
         )
         if answer.lower() not in ['yes', 'y']:
@@ -1259,8 +1259,8 @@ def delete_old_medias(sys_args):
             args.plain_email_template,
         )
         message, _context, _details = _prepare_mail(
-            msc,
-            sender=msc.conf.get('SMTP_SENDER_EMAIL', 'your-smtp-account@example.com'),
+            ngc,
+            sender=ngc.conf.get('SMTP_SENDER_EMAIL', 'your-smtp-account@example.com'),
             speaker_email=args.fallback_email,
             medias=DUMMY_MEDIAS,
             delete_date=delete_date,
@@ -1272,7 +1272,7 @@ def delete_old_medias(sys_args):
         logger.info(message)
     else:
         logger.info('Fetching catalog to list faculties...')
-        tree = msc.get_catalog(fmt='tree')
+        tree = ngc.get_catalog(fmt='tree')
         faculties = sorted(tree.get('channels', []), key=lambda ch: ch.get('title', ''))
 
         print('\nAvailable faculties:')
@@ -1295,7 +1295,7 @@ def delete_old_medias(sys_args):
             print(f'\nProcessing: {", ".join(selected_titles)}')
 
         medias, records, channels = _get_medias(
-            msc,
+            ngc,
             added_after=added_after,
             added_before=added_before,
             views_max_count=views_max_count,
@@ -1309,7 +1309,7 @@ def delete_old_medias(sys_args):
             _generate_media_report(
                 channels,
                 records,
-                server_url=msc.conf['SERVER_URL'],
+                server_url=ngc.conf['SERVER_URL'],
                 output_path=Path(args.media_report),
                 apply=args.apply,
             )
@@ -1317,14 +1317,14 @@ def delete_old_medias(sys_args):
             _generate_media_csv(
                 channels,
                 records,
-                server_url=msc.conf['SERVER_URL'],
+                server_url=ngc.conf['SERVER_URL'],
                 output_path=Path(args.media_csv),
             )
         report_data = None
         apply_deletion = args.apply
         if delete_date > today or args.send_email_on_deletion:
             report_data = _warn_speakers_about_deletion(
-                msc,
+                ngc,
                 medias,
                 delete_date=delete_date,
                 skip_categories=skip_categories,
@@ -1340,7 +1340,7 @@ def delete_old_medias(sys_args):
         if args.email_report and report_data is not None:
             _generate_email_report(
                 report_data,
-                server_url=msc.conf['SERVER_URL'],
+                server_url=ngc.conf['SERVER_URL'],
                 output_path=Path(args.email_report),
                 apply=args.apply,
             )
@@ -1351,7 +1351,7 @@ def delete_old_medias(sys_args):
                 output_path=Path(args.email_csv),
             )
         if delete_date <= today:
-            _delete_medias(msc, medias, apply=apply_deletion)
+            _delete_medias(ngc, medias, apply=apply_deletion)
 
 
 if __name__ == '__main__':

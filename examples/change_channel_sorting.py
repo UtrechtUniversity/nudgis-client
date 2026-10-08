@@ -10,7 +10,7 @@ import sys
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
 
@@ -47,14 +47,14 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
     # ping
     print('Fetching catalog')
-    all_channels = msc.get_catalog(fmt='flat').get('channels')
+    all_channels = ngc.get_catalog(fmt='flat').get('channels')
     channels_count = len(all_channels)
     for index, channel in enumerate(all_channels):
         oid = channel['oid']
         prefix = '' if args.apply else '[DRY RUN] '
         print(f'{prefix}Applying sorting on channel {oid} {index + 1}/{channels_count}')
         if args.apply:
-            msc.api('/channels/edit/', method='post', data={'oid': oid, 'sorting': args.sorting})
+            ngc.api('/channels/edit/', method='post', data={'oid': oid, 'sorting': args.sorting})

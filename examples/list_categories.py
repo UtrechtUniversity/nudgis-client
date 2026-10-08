@@ -16,7 +16,7 @@ from collections import Counter
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -27,9 +27,9 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
 
-    catalog = msc.get_catalog('flat')
+    catalog = ngc.get_catalog('flat')
     counts = Counter()
     for key in ('videos', 'lives'):
         for media in catalog.get(key, ()):

@@ -27,9 +27,9 @@ def api_client(unwatched_tree, all_resources):
             else:
                 return {"success": False}
 
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
-    client = MediaServerClient()
+    client = NudgisClient()
     client.api = mock_api_call
     return client
 

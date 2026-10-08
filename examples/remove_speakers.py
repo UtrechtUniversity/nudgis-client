@@ -37,10 +37,10 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 try:
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
 
 logger = logging.getLogger(__name__)
@@ -239,13 +239,13 @@ def _select_faculties(channels: list[dict], personal_channels_title: str) -> Opt
 
 
 def _remove_speakers(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     rules: list[RemovalRule],
     faculty_oids: set,
     report_path: Path,
     apply: bool = False,
 ):
-    catalog = msc.get_catalog(fmt='flat')
+    catalog = ngc.get_catalog(fmt='flat')
     channels = {ch['oid']: ch for ch in catalog['channels']}
     channel_to_faculty = _build_channel_to_faculty_map(catalog['channels'])
 
@@ -309,7 +309,7 @@ def _remove_speakers(
             removed_pp = ', '.join(spk.name or spk.email or spk.id for spk in removed)
             replaced_pp = ', '.join(spk.name for spk in replacements)
             if apply:
-                msc.api('medias/edit/', method='post', data={
+                ngc.api('medias/edit/', method='post', data={
                     'oid': oid,
                     'speaker': '|'.join(spk.name for spk in new_speakers),
                     'speaker_email': '|'.join(spk.email for spk in new_speakers),
@@ -334,7 +334,7 @@ def _remove_speakers(
                 'type': key[:-1],
                 'faculty': faculty.get('title', ''),
                 'channel': parent.get('title', ''),
-                'url': f'{msc.conf["SERVER_URL"]}/permalink/{oid}/',
+                'url': f'{ngc.conf["SERVER_URL"]}/permalink/{oid}/',
                 'removed_speakers': ' | '.join(
                     f'{spk.name} <{spk.email}> ({spk.id})' for spk in removed
                 ),
@@ -418,18 +418,18 @@ def remove_speakers(sys_args):
     rules = _load_rules(args.csv_file)
     logger.info(f'Loaded {len(rules)} speaker removal rule(s) from "{args.csv_file}".')
 
-    msc = MediaServerClient(args.conf)
-    msc.conf['TIMEOUT'] = max(600, msc.conf['TIMEOUT'])
-    msc.check_server()
+    ngc = NudgisClient(args.conf)
+    ngc.conf['TIMEOUT'] = max(600, ngc.conf['TIMEOUT'])
+    ngc.check_server()
 
     logger.info('Fetching catalog to list faculties...')
-    catalog = msc.get_catalog(fmt='flat')
+    catalog = ngc.get_catalog(fmt='flat')
     faculty_oids = _select_faculties(catalog['channels'], args.personal_channels_title)
 
     if args.apply:
         answer = input(
             'The script is running in apply mode. Speakers will be removed from '
-            f'recordings on {msc.conf["SERVER_URL"]}.\nProceed ? [y / n] '
+            f'recordings on {ngc.conf["SERVER_URL"]}.\nProceed ? [y / n] '
         )
         if answer.lower() not in ['yes', 'y']:
             sys.exit(0)
@@ -437,7 +437,7 @@ def remove_speakers(sys_args):
         logger.info('[Dry run] The script is running in dry-run mode. No changes will be applied.')
 
     _remove_speakers(
-        msc,
+        ngc,
         rules,
         faculty_oids=faculty_oids,
         report_path=args.report,

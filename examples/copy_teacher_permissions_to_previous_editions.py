@@ -45,10 +45,10 @@ import sys
 import threading
 
 try:
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
 
 logger = logging.getLogger(__name__)
@@ -269,12 +269,12 @@ def _get_course_work(
     )
 
 
-def _get_thread_client(conf: str) -> MediaServerClient:
+def _get_thread_client(conf: str) -> NudgisClient:
     '''Use one client per worker because requests.Session is not thread-safe.'''
     if getattr(_thread_local, 'conf', None) != conf:
-        _thread_local.msc = MediaServerClient(conf, setup_logging=False)
+        _thread_local.ngc = NudgisClient(conf, setup_logging=False)
         _thread_local.conf = conf
-    return _thread_local.msc
+    return _thread_local.ngc
 
 
 def _user_label(user: dict) -> str:
@@ -282,7 +282,7 @@ def _user_label(user: dict) -> str:
 
 
 def _process_course(
-    msc: MediaServerClient,
+    ngc: NudgisClient,
     faculty: dict,
     course: dict,
     editions: list[dict],
@@ -315,7 +315,7 @@ def _process_course(
     teachers_by_id = {}
     for source in sources:
         try:
-            response = msc.api(
+            response = ngc.api(
                 'perms/get/for-content/',
                 params={'oid': source['oid'], 'users': 'yes'},
             )
@@ -337,7 +337,7 @@ def _process_course(
         teacher_updates_needed = 0
         teacher_updated = 0
         try:
-            response = msc.api(
+            response = ngc.api(
                 'perms/get/',
                 params={
                     'type': 'user',
@@ -374,7 +374,7 @@ def _process_course(
                 **{permission: 'True' for permission in TEACHER_PERMISSIONS},
             }
             try:
-                msc.api('perms/edit/', method='post', data=data)
+                ngc.api('perms/edit/', method='post', data=data)
             except Exception as exc:
                 result.errors.append(
                     f'Could not update {_user_label(teacher)} on edition '
@@ -521,10 +521,10 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
         level=getattr(logging, args.log_level.upper()),
     )
 
-    msc = MediaServerClient(args.conf, setup_logging=False)
-    msc.check_server()
+    ngc = NudgisClient(args.conf, setup_logging=False)
+    ngc.check_server()
     logger.info('Fetching the channel catalog to list faculties...')
-    catalog = msc.get_catalog(fmt='flat')
+    catalog = ngc.get_catalog(fmt='flat')
     channels = catalog.get('channels', [])
 
     try:
@@ -557,7 +557,7 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     if args.apply:
         answer = input(
             'The script is running in apply mode. Teacher permissions will be copied '
-            f'to target editions on {msc.conf["SERVER_URL"]}.\nProceed ? [y / n] '
+            f'to target editions on {ngc.conf["SERVER_URL"]}.\nProceed ? [y / n] '
         )
         if answer.lower() not in ('yes', 'y'):
             return 0

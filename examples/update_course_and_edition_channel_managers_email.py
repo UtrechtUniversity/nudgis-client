@@ -30,23 +30,23 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-# Thread-local storage so each worker thread has its own MediaServerClient
+# Thread-local storage so each worker thread has its own NudgisClient
 # (requests.Session is not safe to share across threads).
 _thread_local = threading.local()
 
 
 def _get_thread_client(conf_path):
-    if not hasattr(_thread_local, 'msc'):
-        _thread_local.msc = MediaServerClient(conf_path, setup_logging=False)
-    return _thread_local.msc
+    if not hasattr(_thread_local, 'ngc'):
+        _thread_local.ngc = NudgisClient(conf_path, setup_logging=False)
+    return _thread_local.ngc
 
 
-def update_channel(msc, oid, new_email, dry_run):
+def update_channel(ngc, oid, new_email, dry_run):
     '''Apply the email update to a single channel. Returns error string or None.'''
     if dry_run:
         return None
     try:
-        msc.api(
+        ngc.api(
             'channels/edit/',
             method='post',
             data={
@@ -100,8 +100,8 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
     old_email = _catalog_email(channel)
     if old_email != new_email:
         if not dry_run:
-            msc = _get_thread_client(conf_path)
-            error = update_channel(msc, oid, new_email, dry_run)
+            ngc = _get_thread_client(conf_path)
+            error = update_channel(ngc, oid, new_email, dry_run)
             match_value = 'error' if error is not None else 'yes'
         else:
             error = None
@@ -123,8 +123,8 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
         ed_old_email = _catalog_email(edition)
         if ed_old_email != new_email:
             if not dry_run:
-                msc = _get_thread_client(conf_path)
-                ed_error = update_channel(msc, ed_oid, new_email, dry_run)
+                ngc = _get_thread_client(conf_path)
+                ed_error = update_channel(ngc, ed_oid, new_email, dry_run)
             else:
                 ed_error = None
             if ed_error is not None:
@@ -159,7 +159,7 @@ def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_r
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(
         description=__doc__.strip(),
@@ -232,11 +232,11 @@ if __name__ == '__main__':
     # -------------------------------------------------------------------------
     # Connect and fetch the full channel catalog
     # -------------------------------------------------------------------------
-    msc = MediaServerClient(args.conf)
-    print(msc.api('/'))
+    ngc = NudgisClient(args.conf)
+    print(ngc.api('/'))
 
     print('Fetching channel catalog...')
-    catalog = msc.get_catalog(fmt='flat')
+    catalog = ngc.get_catalog(fmt='flat')
     all_channels = catalog.get('channels', [])
     print(f'Total channels in catalog: {len(all_channels)}')
 
@@ -287,7 +287,7 @@ if __name__ == '__main__':
     total = len(course_channels)
     lock = threading.Lock()
 
-    server_url = msc.conf['SERVER_URL'].rstrip('/')
+    server_url = ngc.conf['SERVER_URL'].rstrip('/')
     print(f'Processing {total} course channels with {args.workers} workers...')
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:

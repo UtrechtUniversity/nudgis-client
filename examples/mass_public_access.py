@@ -11,7 +11,7 @@ import argparse
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ms_client.client import MediaServerClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -52,9 +52,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    msc = MediaServerClient(args.conf)
+    ngc = NudgisClient(args.conf)
     # ping
-    print(msc.api('/'))
+    print(ngc.api('/'))
 
     with open(args.csv, 'r') as f:
         csv_data = f.read().strip()
@@ -78,7 +78,7 @@ if __name__ == '__main__':
                     }
                     print(f'{prefix}Validating {oid}')
                     if args.apply:
-                        msc.api('medias/edit/', method='post', data=data)
+                        ngc.api('medias/edit/', method='post', data=data)
                     data = {
                         'oid': oid,
                         'users-anonymous-can_access_media': 'True',
@@ -87,7 +87,7 @@ if __name__ == '__main__':
                     }
                     print(f'{prefix}Making {oid} public')
                     if args.apply:
-                        msc.api('perms/edit/default/', method='post', data=data)
+                        ngc.api('perms/edit/default/', method='post', data=data)
                     count += 1
                 except Exception as e:
                     print(f'Error on {oid}: {e}')
