@@ -8,6 +8,7 @@ their medias by applying a category to them.
 """
 
 import argparse
+from contextlib import nullcontext
 import csv
 from datetime import date, datetime, timedelta
 from email.mime.text import MIMEText
@@ -344,18 +345,6 @@ def _get_templates(
     return html_template, plain_template
 
 
-def _is_smtp_connection_failure(error: OSError) -> bool:
-    if isinstance(error, smtplib.SMTPServerDisconnected):
-        return True
-    # A 421 reply closes the connection, including when returned for a recipient.
-    if isinstance(error, smtplib.SMTPRecipientsRefused):
-        return any(code == 421 for code, _message in error.recipients.values())
-    if isinstance(error, smtplib.SMTPResponseException):
-        return error.smtp_code == 421
-    # Other SMTP exceptions also inherit from OSError, but are not disconnects.
-    return not isinstance(error, smtplib.SMTPException)
-
-
 def _warn_speakers_about_deletion(
     msc: MediaServerClient,
     medias: list[dict],
@@ -428,89 +417,36 @@ def _warn_speakers_about_deletion(
         ) for speaker_email, speaker_medias in medias_per_speaker.items()
     }
 
-    report_data = []
-    smtp = None
-    connection_error = None
-    ssl_context = ssl.create_default_context() if apply else None
+    if apply:
+        ssl_context = ssl.create_default_context()
+        smtp_ctx_manager = smtplib.SMTP_SSL(smtp_server, 465, context=ssl_context)
+    else:
+        smtp_ctx_manager = nullcontext()
 
-    def close_smtp():
-        nonlocal smtp
-        if smtp is not None:
+    report_data = {}
+    sent_count = 0
+    with smtp_ctx_manager as smtp:
+        if apply:
+            smtp.login(smtp_login, smtp_password)
+        for recipient, (message, context, media_details) in to_send.items():
             try:
-                smtp.close()
-            except OSError as err:
-                logger.warning('Error closing SMTP connection: %s', err)
-            smtp = None
-
-    def deliver_email(recipient, message):
-        nonlocal smtp
-        if smtp is None:
-            try:
-                smtp = smtplib.SMTP(smtp_server, 587)
-                smtp.starttls(context=ssl_context)
-                smtp.login(smtp_login, smtp_password)
-            except Exception:
-                close_smtp()
-                raise
-        smtp.sendmail(smtp_email, recipient, message)
-
-    def send_email(recipient, prepared_mail, is_fallback=False):
-        nonlocal connection_error
-        message, context, media_details = prepared_mail
-        status = 'dry_run'
-        error = ''
-        if connection_error is not None:
-            status = 'skipped_smtp_disconnect'
-            error = connection_error
-        elif apply:
-            try:
-                try:
-                    deliver_email(recipient, message)
-                except OSError as err:
-                    if not _is_smtp_connection_failure(err):
-                        raise
-                    logger.warning(
-                        'SMTP connection failed while sending to "%s": %s; '
-                        'reconnecting and retrying once.', recipient, err,
-                    )
-                    close_smtp()
-                    deliver_email(recipient, message)
-            except OSError as err:  # Includes smtplib.SMTPException.
-                error = f'{type(err).__name__}: {err}'
-                if _is_smtp_connection_failure(err):
-                    status = 'failed_smtp_disconnect'
-                    connection_error = error
-                    close_smtp()
-                    logger.error(
-                        'SMTP connection failed again while sending to "%s": %s. '
-                        'Switching the rest of this run to dry-run mode; '
-                        'no further emails will be sent or media deleted.',
-                        recipient, error,
-                    )
-                else:
-                    status = 'failed_smtp'
-                    logger.error('Cannot send email to "%s": %s.', recipient, error)
-                    if is_fallback:
-                        raise
-            else:
-                status = 'sent'
-        logger.debug('Email to "%s": %s.', recipient, status)
-        report_data.append({
-            'recipient': recipient,
-            'status': status,
-            'error': error,
-            'context': context,
-            'media_details': media_details,
-        })
-        return status
-
-    try:
-        for recipient, prepared_mail in to_send.items():
-            if send_email(recipient, prepared_mail) == 'failed_smtp':
-                logger.info('Adding medias for "%s" to the fallback email.', recipient)
+                if apply:
+                    smtp.sendmail(smtp_email, recipient, message)
+            except smtplib.SMTPException as err:
+                logger.error(
+                    f'Cannot send email to "{recipient}": {err}. '
+                    'Medias will be added to the fallback recipient\'s email.'
+                )
                 to_fallback += medias_per_speaker[recipient]
+            else:
+                if apply:
+                    logger.debug(f'Sent "{recipient}" an email about {context}.')
+                else:
+                    logger.debug(f'[Dry run] Would have sent "{recipient}" an email about {context}.')
+                report_data[recipient] = (context, media_details)
+                sent_count += 1
         if to_fallback:
-            fallback_mail = _prepare_mail(
+            fallback_message, context, media_details = _prepare_mail(
                 msc,
                 sender=smtp_email,
                 speaker_email=fallback_email,
@@ -521,13 +457,26 @@ def _warn_speakers_about_deletion(
                 plain_template=plain_template,
                 email_subject_template=email_subject_template,
             )
-            send_email(fallback_email, fallback_mail, is_fallback=True)
-    finally:
-        close_smtp()
-    counts = {}
-    for email in report_data:
-        counts[email['status']] = counts.get(email['status'], 0) + 1
-    logger.info('Email results: %s.', ', '.join(f'{status}={count}' for status, count in counts.items()) or 'none')
+            try:
+                if apply:
+                    smtp.sendmail(smtp_email, fallback_email, fallback_message)
+            except Exception as err:
+                logger.error(
+                    f'Mail delivery to fallback email address "{fallback_email}" failed.\n'
+                    f'{fallback_message}'
+                )
+                raise err
+            else:
+                if apply:
+                    logger.debug(f'Sent "{fallback_email}" an email about {context}.')
+                else:
+                    logger.debug(f'[Dry run] Would have sent "{fallback_email}" an email about {context}.')
+                report_data[fallback_email] = (context, media_details)
+                sent_count += 1
+        if apply:
+            logger.info(f'Sent {sent_count} emails.')
+        else:
+            logger.info(f'[Dry run] {sent_count} emails would have been sent.')
     return report_data
 
 
@@ -583,20 +532,6 @@ STATUS_LABELS = {
     'skip_added_before': 'Skipped — too old',
     'skip_views': 'Skipped — viewed enough',
     'skip_categories': 'Skipped — protected category',
-}
-EMAIL_STATUS_LABELS = {
-    'sent': 'Sent',
-    'failed_smtp_disconnect': 'Failed — SMTP connection failure',
-    'skipped_smtp_disconnect': 'Not sent — dry run after SMTP connection failure',
-    'failed_smtp': 'Failed — SMTP error',
-    'dry_run': 'Not sent — dry run',
-}
-EMAIL_STATUS_COLORS = {
-    'sent': '#16a34a',
-    'failed_smtp_disconnect': '#dc2626',
-    'skipped_smtp_disconnect': '#ea580c',
-    'failed_smtp': '#dc2626',
-    'dry_run': '#2563eb',
 }
 
 
@@ -762,25 +697,18 @@ def _generate_media_report(
 
 
 def _generate_email_report(
-    report_data: list[dict],
+    report_data: dict,
     server_url: str,
     output_path: Path,
     apply: bool,
 ):
-    '''Report every planned email, including failures and emails left unsent.'''
+    '''Generate an HTML tree report of every email that was (or would be) sent.'''
     prefix = '' if apply else '[Dry run] '
     generated = datetime.now().strftime('%Y-%m-%d %H:%M')
     items = []
     total_medias = 0
-    counts = {}
-    for email_number, email in sorted(enumerate(report_data, 1), key=lambda item: item[1]['recipient']):
-        recipient = email['recipient']
-        context = email['context']
-        media_details = email['media_details']
-        status = email['status']
-        counts[status] = counts.get(status, 0) + 1
+    for recipient, (context, media_details) in sorted(report_data.items()):
         total_medias += context['media_count']
-        error_html = f'<p class="reason">{html.escape(email["error"])}</p>' if email['error'] else ''
         media_items = ''.join(
             f'<li><a href="{html.escape(m["view_url"])}" target="_blank">{html.escape(m["title"])}</a> '
             f'<span class="reason">added {m["add_date"]} ({m["age"]} ago), viewed {html.escape(m["views"])}</span></li>'
@@ -788,12 +716,8 @@ def _generate_email_report(
         )
         items.append(
             f'<details><summary><strong>{html.escape(recipient)}</strong> '
-            f'<span class="badge" style="background:{EMAIL_STATUS_COLORS[status]}">'
-            f'{EMAIL_STATUS_LABELS[status]}</span> '
-            f'<span class="meta">— email #{email_number}, '
-            f'{context["media_count"]} medias, {context["media_size_pp"]}</span></summary>'
+            f'<span class="meta">— {context["media_count"]} medias, {context["media_size_pp"]}</span></summary>'
             f'<div class="children">'
-            f'{error_html}'
             f'<p class="meta">Delete date: <strong>{html.escape(context["delete_date"])}</strong> '
             f'&nbsp;|&nbsp; Skip categories: {html.escape(context["skip_categories"])} '
             f'&nbsp;|&nbsp; Platform: {html.escape(context["platform_hostname"])}</p>'
@@ -801,19 +725,6 @@ def _generate_email_report(
             f'</div></details>'
         )
 
-    legend = ''.join(
-        f'<span style="background:{EMAIL_STATUS_COLORS[status]}">'
-        f'{EMAIL_STATUS_LABELS[status]} ({count})</span>'
-        for status, count in counts.items()
-    )
-    failure_note = ''
-    if counts.get('failed_smtp_disconnect'):
-        failure_note = (
-            '<p>SMTP connection failure persisted after one retry. The remainder of this run '
-            'continued in dry-run mode. Delivery of the interrupted email could not be confirmed; '
-            'emails marked "Not sent" were not attempted.</p>'
-        )
-    recipient_count = len({email['recipient'] for email in report_data})
     doc = (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<title>{prefix}Email notifications report</title>'
@@ -821,10 +732,8 @@ def _generate_email_report(
         f'<h1>{prefix}Email notifications report</h1>'
         f'<p class="meta">Server: <strong>{html.escape(server_url)}</strong> '
         f'&nbsp;|&nbsp; Generated: <strong>{generated}</strong> '
-        f'&nbsp;|&nbsp; Recipients: <strong>{recipient_count}</strong> '
-        f'&nbsp;|&nbsp; Emails: <strong>{len(report_data)}</strong> '
-        f'&nbsp;|&nbsp; Media references: <strong>{total_medias}</strong></p>'
-        f'<div class="legend">{legend}</div>{failure_note}'
+        f'&nbsp;|&nbsp; Recipients: <strong>{len(report_data)}</strong> '
+        f'&nbsp;|&nbsp; Medias notified: <strong>{total_medias}</strong></p>'
         f'<div class="controls">'
         f'<button onclick="expandAll()">Expand all</button>'
         f'<button onclick="collapseAll()">Collapse all</button>'
@@ -838,35 +747,31 @@ def _generate_email_report(
 
 
 def _generate_email_csv(
-    report_data: list[dict],
+    report_data: dict,
     channels: list[dict],
     output_path: Path,
 ):
-    '''One row per email message and faculty, including its delivery status.'''
+    '''One row per unique (email, faculty) pair with an aggregate video count.'''
     channel_to_faculty = _build_channel_to_faculty_map(channels)
     title_by_oid = {ch['oid']: ch.get('title', '') for ch in channels}
 
-    rows: dict[tuple[int, str], dict] = {}
-    for email_number, email in enumerate(report_data, 1):
-        for media in email['media_details']:
+    rows: dict[tuple[str, str], dict] = {}
+    for recipient, (context, media_details) in report_data.items():
+        for media in media_details:
             faculty_oid = channel_to_faculty.get(media.get('parent_oid'), '') or ''
-            key = (email_number, faculty_oid)
+            key = (recipient, faculty_oid)
             row = rows.setdefault(key, {
-                'email': email['recipient'],
+                'email': recipient,
                 'faculty_title': title_by_oid.get(faculty_oid, ''),
                 'video_count': 0,
                 '_total_bytes': 0,
-                'delete_date': email['context']['delete_date'],
-                'email_number': email_number,
-                'status': email['status'],
-                'error': email['error'],
+                'delete_date': context['delete_date'],
             })
             row['video_count'] += 1
             row['_total_bytes'] += media.get('storage_used', 0)
 
-    fieldnames = ['email', 'faculty_title', 'video_count', 'total_size', 'delete_date',
-                  'email_number', 'status', 'error']
-    sorted_rows = sorted(rows.values(), key=lambda r: (r['email'], r['email_number'], r['faculty_title']))
+    fieldnames = ['email', 'faculty_title', 'video_count', 'total_size', 'delete_date']
+    sorted_rows = sorted(rows.values(), key=lambda r: (r['email'], r['faculty_title']))
     with output_path.open('w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -877,9 +782,6 @@ def _generate_email_csv(
                 'video_count': row['video_count'],
                 'total_size': format_bytes(row['_total_bytes']),
                 'delete_date': row['delete_date'],
-                'email_number': row['email_number'],
-                'status': row['status'],
-                'error': row['error'],
             })
     logger.info(f'Wrote email CSV ({len(sorted_rows)} rows) to {output_path}.')
 
@@ -1152,9 +1054,7 @@ def delete_old_medias(sys_args):
         '--email-report',
         help='Path of the HTML email-notifications report to write. '
              'The report is a collapsible tree of recipients with their '
-             'delivery status, SMTP errors, and a clickable list of videos. '
-             'After two connection failures for an email, the rest of the run '
-             'continues in dry-run mode and the report includes unsent emails. '
+             'email metadata and a clickable list of videos. '
              'Defaults to "./email_report_<hostname>_<timestamp>.html". '
              'Pass an empty string to disable. Only produced when emails are '
              'sent or simulated.',
@@ -1163,9 +1063,9 @@ def delete_old_medias(sys_args):
     )
     parser.add_argument(
         '--email-csv',
-        help='Path of the CSV email summary to write. One row per email message '
-             'and top-level faculty channel, with an aggregate video count, '
-             'email number, delivery status, and SMTP error. Defaults to '
+        help='Path of the per-(email, faculty) CSV summary to write. One row '
+             'per unique (recipient, top-level faculty channel) pair with an '
+             'aggregate video count. Defaults to '
              '"./email_report_<hostname>_<timestamp>.csv". '
              'Pass an empty string to disable. Only produced when emails are '
              'sent or simulated.',
@@ -1321,7 +1221,6 @@ def delete_old_medias(sys_args):
                 output_path=Path(args.media_csv),
             )
         report_data = None
-        apply_deletion = args.apply
         if delete_date > today or args.send_email_on_deletion:
             report_data = _warn_speakers_about_deletion(
                 msc,
@@ -1335,8 +1234,6 @@ def delete_old_medias(sys_args):
                 fallback_email=args.fallback_email,
                 apply=args.apply,
             )
-            if any(email['status'] == 'failed_smtp_disconnect' for email in report_data):
-                apply_deletion = False
         if args.email_report and report_data is not None:
             _generate_email_report(
                 report_data,
@@ -1351,7 +1248,7 @@ def delete_old_medias(sys_args):
                 output_path=Path(args.email_csv),
             )
         if delete_date <= today:
-            _delete_medias(msc, medias, apply=apply_deletion)
+            _delete_medias(msc, medias, apply=args.apply)
 
 
 if __name__ == '__main__':

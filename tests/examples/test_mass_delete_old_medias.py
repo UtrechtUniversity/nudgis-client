@@ -8,6 +8,9 @@ import pytest
 
 
 from examples.mass_delete_old_medias import (
+    EMAIL_STATUS_LABELS,
+    _generate_email_csv,
+    _generate_email_report,
     _generate_media_csv,
     _get_templates,
     _warn_speakers_about_deletion,
@@ -217,6 +220,7 @@ class MockSMTP:
         self.factory = None
         self._tls_started = False
         self._logged_in = False
+        self.closed = False
         self.mailbox: list[Message] = []
 
     def __enter__(self):
@@ -234,6 +238,9 @@ class MockSMTP:
         assert sender == 'sender'
         assert password == 's3cr3t'
         self._logged_in = True
+
+    def close(self):
+        self.closed = True
 
     def sendmail(self, sender, recipient, message):
         assert self._logged_in
@@ -260,6 +267,24 @@ def mock_smtp():
         yield mock_smtp
 
 
+@pytest.fixture()
+def warn_speakers(api_client, tmp_path):
+    def warn(medias, **overrides):
+        options = {
+            'delete_date': IN_A_MONTH,
+            'skip_categories': ['do not delete'],
+            'html_email_template': tmp_path / 'missing.html',
+            'plain_email_template': tmp_path / 'missing.txt',
+            'email_subject_template': 'Deletion warning for {platform_hostname}',
+            'fallback_to_channel_manager': False,
+            'fallback_email': 'fallback@example.com',
+            'apply': True,
+        }
+        options.update(overrides)
+        return _warn_speakers_about_deletion(api_client, medias, **options)
+    return warn
+
+
 def test_smtp_uses_starttls_on_port_587(api_client, catalog, mock_smtp, tmp_path):
     _warn_speakers_about_deletion(
         api_client,
@@ -276,6 +301,228 @@ def test_smtp_uses_starttls_on_port_587(api_client, catalog, mock_smtp, tmp_path
 
     mock_smtp.factory.assert_called_once_with('smtp.example.com', 587)
     assert mock_smtp._tls_started
+
+
+@pytest.mark.parametrize('disconnect_error', [
+    smtplib.SMTPServerDisconnected, ConnectionResetError, TimeoutError,
+])
+@pytest.mark.parametrize('media_index, recipient', [
+    (0, 'john.doe@example.com'),
+    (1, 'fallback@example.com'),
+])
+def test_smtp_reconnects_after_disconnect(
+    api_client, catalog, tmp_path, media_index, recipient, disconnect_error,
+):
+    class DisconnectingSMTP(MockSMTP):
+        def sendmail(self, sender, email, message):
+            if email == recipient:
+                raise disconnect_error('Connection lost')
+            super().sendmail(sender, email, message)
+
+    first = DisconnectingSMTP()
+    second = MockSMTP()
+    with mock.patch('smtplib.SMTP', side_effect=[first, second]) as factory:
+        report_data = _warn_speakers_about_deletion(
+            api_client,
+            medias=[catalog['videos'][media_index]],
+            delete_date=IN_A_MONTH,
+            skip_categories=['do not delete'],
+            html_email_template=tmp_path / 'missing.html',
+            plain_email_template=tmp_path / 'missing.txt',
+            email_subject_template='Deletion warning for {platform_hostname}',
+            fallback_to_channel_manager=False,
+            fallback_email='fallback@example.com',
+            apply=True,
+        )
+
+    assert factory.call_args_list == [
+        mock.call('smtp.example.com', 587),
+        mock.call('smtp.example.com', 587),
+    ]
+    assert first.closed and second.closed
+    assert second._tls_started and second._logged_in
+    assert second.has_mail('sender@example.com', recipient, [catalog['videos'][media_index]['oid']])
+    assert [(email['recipient'], email['status']) for email in report_data] == [(recipient, 'sent')]
+
+
+def test_smtp_recipient_rejection_uses_fallback_without_reconnecting(
+    api_client, catalog, users, mock_smtp, tmp_path,
+):
+    users.append({'email': 'error@example.com', 'is_active': True, 'speaker_id': ''})
+    media = catalog['videos'][3]
+    with mock.patch.object(mock_smtp, 'sendmail', wraps=mock_smtp.sendmail) as sendmail:
+        report_data = _warn_speakers_about_deletion(
+            api_client,
+            medias=[media],
+            delete_date=IN_A_MONTH,
+            skip_categories=['do not delete'],
+            html_email_template=tmp_path / 'missing.html',
+            plain_email_template=tmp_path / 'missing.txt',
+            email_subject_template='Deletion warning for {platform_hostname}',
+            fallback_to_channel_manager=False,
+            fallback_email='fallback@example.com',
+            apply=True,
+        )
+
+    mock_smtp.factory.assert_called_once_with('smtp.example.com', 587)
+    assert [call.args[1] for call in sendmail.call_args_list] == [
+        'error@example.com', 'fallback@example.com',
+    ]
+    assert mock_smtp.has_mail('sender@example.com', 'fallback@example.com', [media['oid']])
+    assert [(email['recipient'], email['status']) for email in report_data] == [
+        ('error@example.com', 'failed_smtp'),
+        ('fallback@example.com', 'sent'),
+    ]
+
+
+@pytest.mark.parametrize('error', [
+    smtplib.SMTPServerDisconnected('Connection lost <unexpectedly>'),
+    ConnectionResetError('Connection reset'),
+    TimeoutError('Connection timed out'),
+    smtplib.SMTPRecipientsRefused({'jane.doe@example.com': (421, b'Service unavailable')}),
+    smtplib.SMTPSenderRefused(421, b'Service unavailable', 'sender@example.com'),
+    smtplib.SMTPDataError(421, b'Service unavailable'),
+])
+def test_smtp_second_connection_failure_preserves_sent_and_unsent_emails(
+    warn_speakers, catalog, tmp_path, error,
+):
+    first, second = MockSMTP(), MockSMTP()
+    original_sendmail = first.sendmail
+
+    def sendmail(sender, recipient, message):
+        if recipient == 'jane.doe@example.com':
+            raise error
+        original_sendmail(sender, recipient, message)
+
+    first.sendmail = mock.Mock(side_effect=sendmail)
+    second.sendmail = mock.Mock(side_effect=error)
+    with mock.patch('smtplib.SMTP', side_effect=[first, second]) as factory:
+        report_data = warn_speakers([
+            catalog['videos'][0], catalog['videos'][5],
+            catalog['lives'][0], catalog['videos'][1],
+        ])
+
+    assert factory.call_count == 2
+    assert first.closed and second.closed
+    assert [call.args[1] for call in first.sendmail.call_args_list] == [
+        'john.doe@example.com', 'jane.doe@example.com',
+    ]
+    assert [call.args[1] for call in second.sendmail.call_args_list] == ['jane.doe@example.com']
+    assert len(first.mailbox) == 1
+    expected_statuses = {
+        'john.doe@example.com': 'sent',
+        'jane.doe@example.com': 'failed_smtp_disconnect',
+        'june.doe@example.com': 'skipped_smtp_disconnect',
+        'fallback@example.com': 'skipped_smtp_disconnect',
+    }
+    assert {email['recipient']: email['status'] for email in report_data} == expected_statuses
+    assert report_data[0]['error'] == ''
+    assert str(error) in report_data[1]['error']
+    assert report_data[2]['error'] == report_data[1]['error']
+
+    html_path, csv_path = tmp_path / 'emails.html', tmp_path / 'emails.csv'
+    _generate_email_report(report_data, 'https://video.example', html_path, apply=True)
+    _generate_email_csv(report_data, catalog['channels'], csv_path)
+    doc = html_path.read_text(encoding='utf-8')
+    for status in expected_statuses.values():
+        assert EMAIL_STATUS_LABELS[status] in doc
+    assert 'Delivery of the interrupted email could not be confirmed' in doc
+    assert '<unexpectedly>' not in doc
+    assert 'Medias notified:' not in doc
+    with csv_path.open(encoding='utf-8', newline='') as file:
+        rows = list(csv.DictReader(file))
+    assert {row['email']: row['status'] for row in rows} == expected_statuses
+    assert next(row for row in rows if row['email'] == 'jane.doe@example.com')['error'] == report_data[1]['error']
+
+
+@pytest.mark.parametrize('stage', ['connect', 'starttls', 'login'])
+def test_smtp_setup_failure_switches_to_dry_run_after_retry(warn_speakers, catalog, stage):
+    error = smtplib.SMTPServerDisconnected('Connection lost during setup')
+    connections = [MockSMTP(), MockSMTP()]
+    if stage == 'connect':
+        side_effect = [ConnectionRefusedError('Server unavailable')] * 2
+    else:
+        for connection in connections:
+            setattr(connection, stage, mock.Mock(side_effect=error))
+        side_effect = connections
+    with mock.patch('smtplib.SMTP', side_effect=side_effect) as factory:
+        report_data = warn_speakers([catalog['videos'][5]])
+    assert factory.call_count == 2
+    assert [email['status'] for email in report_data] == ['failed_smtp_disconnect', 'skipped_smtp_disconnect']
+    assert all(not connection.mailbox for connection in connections)
+    if stage != 'connect':
+        assert all(connection.closed for connection in connections)
+
+
+@pytest.mark.parametrize('fallback_email', ['fallback@example.com', 'john.doe@example.com'])
+def test_smtp_fallback_disconnect_preserves_both_messages(warn_speakers, catalog, tmp_path, fallback_email):
+    error = smtplib.SMTPServerDisconnected('Connection lost')
+    first, second = MockSMTP(), MockSMTP()
+    first.sendmail = mock.Mock(side_effect=[{}, error])
+    second.sendmail = mock.Mock(side_effect=error)
+    with mock.patch('smtplib.SMTP', side_effect=[first, second]) as factory:
+        report_data = warn_speakers(
+            [catalog['videos'][0], catalog['videos'][1]], fallback_email=fallback_email,
+        )
+    assert factory.call_count == 2
+    assert [(email['recipient'], email['status']) for email in report_data] == [
+        ('john.doe@example.com', 'sent'),
+        (fallback_email, 'failed_smtp_disconnect'),
+    ]
+    csv_path = tmp_path / 'emails.csv'
+    _generate_email_csv(report_data, catalog['channels'], csv_path)
+    with csv_path.open(encoding='utf-8', newline='') as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 2
+    assert {row['email_number']: row['status'] for row in rows} == {
+        '1': 'sent', '2': 'failed_smtp_disconnect',
+    }
+
+
+def test_smtp_dry_run_records_unsent_messages_without_connecting(warn_speakers, catalog, mock_smtp):
+    report_data = warn_speakers([catalog['videos'][0], catalog['videos'][1]], apply=False)
+    mock_smtp.factory.assert_not_called()
+    assert [email['status'] for email in report_data] == ['dry_run', 'dry_run']
+
+
+def test_smtp_fallback_rejection_still_stops_the_run(warn_speakers, catalog, mock_smtp):
+    with pytest.raises(smtplib.SMTPRecipientsRefused):
+        warn_speakers([catalog['videos'][1]], fallback_email='error@example.com')
+    mock_smtp.factory.assert_called_once_with('smtp.example.com', 587)
+    assert mock_smtp.closed
+
+
+@pytest.mark.parametrize('delete_date', [TODAY, IN_A_MONTH])
+def test_smtp_disconnect_writes_reports_and_disables_deletion(
+    api_client, catalog, no_prompt, tmp_path, delete_date,
+):
+    no_prompt.side_effect = ['y', '0']
+    html_path, csv_path = tmp_path / 'emails.html', tmp_path / 'emails.csv'
+    medias = [catalog['videos'][0], catalog['videos'][1]]
+    tree = {'channels': [{'oid': 'channel_1', 'title': 'Faculty'}]}
+    error = smtplib.SMTPServerDisconnected('Connection lost')
+    first, second = MockSMTP(), MockSMTP()
+    first.sendmail = mock.Mock(side_effect=[{}, error])
+    second.sendmail = mock.Mock(side_effect=error)
+    with (
+        mock.patch.object(api_client, 'get_catalog', return_value=tree),
+        mock.patch('examples.mass_delete_old_medias._get_medias', return_value=(medias, [], catalog['channels'])),
+        mock.patch('smtplib.SMTP', side_effect=[first, second]) as factory,
+    ):
+        delete_old_medias([
+            '--conf=./conf.json', f'--delete-date={delete_date}',
+            f'--added-before={ONE_YEAR_AGO}', '--apply', '--send-email-on-deletion',
+            '--fallback-email=fallback@example.com', '--media-report=', '--media-csv=',
+            f'--email-report={html_path}', f'--email-csv={csv_path}',
+        ])
+    assert factory.call_count == 2
+    assert 'Failed — SMTP connection failure' in html_path.read_text(encoding='utf-8')
+    with csv_path.open(encoding='utf-8', newline='') as file:
+        rows = list(csv.DictReader(file))
+    assert {row['email']: row['status'] for row in rows} == {
+        'john.doe@example.com': 'sent', 'fallback@example.com': 'failed_smtp_disconnect',
+    }
+    assert not any(call.args[0] == 'catalog/bulk_delete/' for call in api_client.api.call_args_list)
 
 
 @pytest.mark.parametrize(
