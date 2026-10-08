@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Script to delete empty channels from a Nudgis portal.
+Script to delete empty channels from Nudgis.
 
-Usage example:
+To use this script clone MediaServer client, configure it and run this file.
+
+git clone https://github.com/UbiCastTeam/mediaserver-client
+cd mediaserver-client
 python3 examples/delete_empty_channels.py --conf conf.json --max-add-date YYYY-MM-DD --exclude channel_oid
 """
 
 import argparse
+import csv
 from datetime import date, datetime
 from pathlib import Path
+import re
 import sys
 
 
@@ -50,45 +55,64 @@ def clean_tree(tree, deleted_oids):
             clean_tree(channel, deleted_oids)
 
 
-def delete_empty_channels(ngc, channel_oid_blacklist, max_date, min_depth, apply=False):
-    tree = ngc.get_catalog(fmt='tree')
+def delete_empty_channels(
+    ngc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300,
+):
+    if tree is None:
+        tree = ngc.get_catalog(fmt='tree')
     channel_oid_blacklist = list(channel_oid_blacklist)
-    ms_url = ngc.conf['SERVER_URL'] + '/permalink/'
+    ms_url = ngc.conf['SERVER_URL'].rstrip('/') + '/permalink/'
+    report_rows = []
+
+    if faculty_oids:
+        working_tree = {'channels': [ch for ch in tree.get('channels', []) if ch['oid'] in faculty_oids]}
+    else:
+        working_tree = tree
 
     while True:
-        empty_channels_oids = [channel['oid'] for channel in empty_channels_iterator(
-            tree,
+        empty_channels = list(empty_channels_iterator(
+            working_tree,
             channel_oid_blacklist=channel_oid_blacklist,
             max_date=max_date,
             min_depth=min_depth,
-        )]
-        if not empty_channels_oids:
+        ))
+        if not empty_channels:
             break
-        deleted_oids = set(empty_channels_oids)
+        empty_by_oid = {ch['oid']: ch for ch in empty_channels}
         if apply:
             response = ngc.api(
                 'catalog/bulk_delete/',
                 method='post',
-                data=dict(oids=empty_channels_oids)
+                data=dict(oids=list(empty_by_oid)),
+                timeout=timeout,
             )
             deleted_oids = {
                 oid
                 for oid, result in response['statuses'].items()
                 if result['status'] == 200
             }
-            for item in deleted_oids:
-                print(f'Empty channel {ms_url}{item} has been deleted')
             if not deleted_oids:
                 break
-        clean_tree(tree, deleted_oids)
-        if not apply:
-            for item in deleted_oids:
-                print(f'[Dry run] Empty channel {ms_url}{item} will be deleted')
+        else:
+            deleted_oids = set(empty_by_oid)
+
+        for oid in deleted_oids:
+            path = empty_by_oid[oid].get('path', [])
+            report_rows.append({
+                'faculty': path[0] if len(path) > 0 else '',
+                'course':  path[1] if len(path) > 1 else '',
+                'edition': path[2] if len(path) > 2 else '',
+                'link':    f'{ms_url}{oid}/',
+            })
+
+        clean_tree(working_tree, deleted_oids)
+
+    return report_rows
 
 
 def main():
     sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from nudgisclient import NudgisClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -124,8 +148,15 @@ def main():
         '--min-depth',
         default=0,
         dest='min_depth',
-        help=('Any channel that is at that depth or below will be deleted. '
-              'By default it is 0 which means started from Main channels.'),
+        help=('Minimum path length a channel must have to be eligible for deletion. '
+              '1=faculty, 2=course, 3=edition. Default 0 means all levels.'),
+        type=int)
+
+    parser.add_argument(
+        '--timeout',
+        default=300,
+        dest='timeout',
+        help='Timeout in seconds for bulk_delete API calls. Default: %(default)s.',
         type=int)
 
     args = parser.parse_args()
@@ -165,7 +196,78 @@ def main():
                 return 1
     else:
         args.exclude_oid = []
-    delete_empty_channels(ngc, args.exclude_oid, max_date, args.min_depth, args.apply)
+
+    print('Fetching catalog...')
+    tree = ngc.get_catalog(fmt='tree')
+    faculties = sorted(tree.get('channels', []), key=lambda ch: ch.get('title', ''))
+
+    print('\nAvailable faculties:')
+    print('  0. All faculties')
+    for i, ch in enumerate(faculties, 1):
+        print(f'  {i}. {ch["title"]}')
+
+    selection = input('\nSelect faculties to process (0 for all, or comma/space separated numbers): ').strip()
+
+    if not selection or selection == '0':
+        faculty_oids = None
+    else:
+        indices = [int(x) for x in re.split(r'[\s,]+', selection) if x.isdigit()]
+        invalid = [x for x in indices if not (1 <= x <= len(faculties))]
+        if invalid:
+            print(f'Invalid selection(s): {invalid}')
+            return 1
+        faculty_oids = {faculties[i - 1]['oid'] for i in indices}
+        selected_titles = [faculties[i - 1]['title'] for i in indices]
+        print(f'\nProcessing: {", ".join(selected_titles)}')
+
+    report_rows = delete_empty_channels(
+        ngc, args.exclude_oid, max_date, args.min_depth, args.apply,
+        faculty_oids=faculty_oids, tree=tree, timeout=args.timeout,
+    )
+
+    if report_rows:
+        faculty_counts = {}
+        for row in report_rows:
+            faculty = row['faculty']
+            if faculty not in faculty_counts:
+                faculty_counts[faculty] = {'course': 0, 'edition': 0, 'other': 0}
+            if row['edition']:
+                faculty_counts[faculty]['edition'] += 1
+            elif row['course']:
+                faculty_counts[faculty]['course'] += 1
+            else:
+                faculty_counts[faculty]['other'] += 1
+        label = 'deleted' if args.apply else 'would be deleted'
+        summary_lines = []
+        for faculty in sorted(faculty_counts):
+            counts = faculty_counts[faculty]
+            parts = []
+            if counts['course']:
+                parts.append(f"{counts['course']} course(s)")
+            if counts['edition']:
+                parts.append(f"{counts['edition']} edition(s)")
+            if counts['other']:
+                parts.append(f"{counts['other']} other channel(s)")
+            summary_lines.append(f'{faculty}:')
+            for part in parts:
+                summary_lines.append(f'  {part} {label}')
+
+        summary_text = '\n'.join(summary_lines)
+        print(summary_text)
+
+        datestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        summary_path = f'delete_empty_channels_summary_{datestamp}.txt'
+        Path(summary_path).write_text(summary_text + '\n', encoding='utf-8')
+        print(f'Summary written to: {summary_path}')
+
+        report_path = f'delete_empty_channels_{datestamp}.csv'
+        with open(report_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['faculty', 'course', 'edition', 'link'])
+            writer.writeheader()
+            writer.writerows(report_rows)
+        print(f'Report written to: {report_path}')
+
     return 0
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Put all media described by oids in a CSV file (first column) as public
 
@@ -9,7 +10,7 @@ import sys
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -42,6 +43,12 @@ if __name__ == '__main__':
         type=str
     )
 
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
+
     args = parser.parse_args()
 
     ngc = NudgisClient(args.conf)
@@ -54,7 +61,8 @@ if __name__ == '__main__':
         freed = 0
         lines = [line for line in csv_data.split('\n') if (line and not line.startswith('#'))]
         total_lines = len(lines)
-        print(f'About to make {total_lines} media public')
+        prefix = '' if args.apply else '[DRY RUN] '
+        print(f'{prefix}About to make {total_lines} media public')
         # there is a limit to how many subprocesses can be launched
 
         for index, line in enumerate(lines):
@@ -62,22 +70,24 @@ if __name__ == '__main__':
             if oid:
                 params = {'oid': oid, 'full': 'yes'}
                 try:
-                    print(f'[{index + 1}/{total_lines}] About to set {oid} public')
+                    print(f'{prefix}[{index + 1}/{total_lines}] About to set {oid} public')
                     data = {
                         'oid': oid,
                         'validated': 'yes'
                     }
-                    print(f'Validating {oid}')
-                    ngc.api('medias/edit/', method='post', data=data)
+                    print(f'{prefix}Validating {oid}')
+                    if args.apply:
+                        ngc.api('medias/edit/', method='post', data=data)
                     data = {
                         'oid': oid,
                         'users-anonymous-can_access_media': 'True',
                         'users-authenticated-can_access_media': 'True',
                         'prefix': 'reference',
                     }
-                    print(f'Making {oid} public')
-                    ngc.api('perms/edit/default/', method='post', data=data)
+                    print(f'{prefix}Making {oid} public')
+                    if args.apply:
+                        ngc.api('perms/edit/default/', method='post', data=data)
                     count += 1
                 except Exception as e:
                     print(f'Error on {oid}: {e}')
-        print(f'Made {count} media public')
+        print(f'{prefix}Made {count} media public')

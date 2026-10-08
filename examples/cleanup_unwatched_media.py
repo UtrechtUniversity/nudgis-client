@@ -1,20 +1,46 @@
 #!/usr/bin/env python3
 """
-Sript which aims at freeing storage by either
+Script which aims at freeing storage by either
 * deleting ABR (HLS) variants of unwatched media
 * putting unwatched media to the trash
+
+A CSV report is written in both apply and dry-run modes. The report contains
+one row for every resource or media that was, or would be, affected.
 """
 
 import argparse
+import csv
 import os
+from pathlib import Path
 import sys
 import time
 
 try:
-    from nudgisclient import NudgisClient, NudgisRequestError
+    from nudgisclient.client import NudgisClient, NudgisRequestError
 except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient, NudgisRequestError
+    from nudgisclient.client import NudgisClient, NudgisRequestError
+
+
+REPORT_FIELDS = [
+    'action',
+    'status',
+    'oid',
+    'title',
+    'resource_path',
+    'size_bytes',
+    'size',
+    'error',
+]
+
+
+def write_report(report_path: Path | str, rows: list[dict]) -> None:
+    """Write an audit report, including its header when there are no actions."""
+    with open(report_path, 'w', newline='', encoding='utf-8') as report_file:
+        writer = csv.DictWriter(report_file, fieldnames=REPORT_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f'Report written to: {report_path}')
 
 
 def get_human_readable_size(num: int, suffix: str = 'B') -> str:
@@ -94,17 +120,28 @@ def get_hls_resources(vods: list[dict]) -> [dict, int]:
 
 
 def delete_hls_resources(
-    ngc: NudgisClient, vods: list[dict], apply: bool = False
+    ngc: NudgisClient,
+    vods: list[dict],
+    apply: bool = False,
+    report_path: Path | str | None = None,
 ) -> int:
     """Delete or simulate deletion of list of hls resources, return deleted count"""
     hls_resources_to_delete, hls_size = get_hls_resources(vods)
     deleted_resources_count = 0
+    report_rows = []
+    vods_by_oid = {vod['object_id']: vod for vod in vods}
     if hls_size:
         print(
             f'Cleaning up {len(hls_resources_to_delete)} HLS resources will free '
             f'{get_human_readable_size(hls_size)}'
         )
         for oid, files in hls_resources_to_delete.items():
+            vod = vods_by_oid[oid]
+            resources_by_path = {
+                resource['path']: resource for resource in vod['resources']
+            }
+            status = 'would be deleted (dry run)'
+            error = ''
             if apply:
                 print(f'Deleting resources of oid {oid}: {files}')
                 params = {'oid': oid, 'names': ','.join(files)}
@@ -114,15 +151,38 @@ def delete_hls_resources(
                     if 'read timeout=' in str(err):
                         print(f'The deletion request timed out for "{oid}", this error can be ignored.')
                         deleted_resources_count += len(files)
+                        status = 'deletion timed out (assumed deleted)'
                     else:
-                        print(f"Error when deleting resources of {oid}: {r['message']}")
+                        print(f'Error when deleting resources of {oid}: {err}')
+                        status = 'failed'
+                        error = str(err).strip()
                 else:
                     if not r['success']:
-                        print(f"Failure when deleting resources of {oid}: {r['message']}")
+                        print(
+                            f"Failure when deleting resources of {oid}: "
+                            f"{r.get('message', '')}"
+                        )
+                        status = 'failed'
+                        error = r.get('message', '')
                     else:
                         deleted_resources_count += len(files)
+                        status = 'deleted'
             else:
                 print(f'[Dry Run] Would delete resources of oid {oid}: {files}')
+            for resource_path in files:
+                resource_size = resources_by_path[resource_path].get('file_size', 0)
+                report_rows.append(
+                    {
+                        'action': 'delete HLS resource',
+                        'status': status,
+                        'oid': oid,
+                        'title': vod.get('title', ''),
+                        'resource_path': resource_path,
+                        'size_bytes': resource_size,
+                        'size': get_human_readable_size(resource_size),
+                        'error': error,
+                    }
+                )
         if apply:
             print(f'Deleted {deleted_resources_count} resources')
         else:
@@ -131,11 +191,16 @@ def delete_hls_resources(
             )
     else:
         print('No HLS resources to cleanup')
+    if report_path is not None:
+        write_report(report_path, report_rows)
     return deleted_resources_count
 
 
 def delete_unwatched_vods(
-    ngc: NudgisClient, vods: list[dict], apply: bool = False
+    ngc: NudgisClient,
+    vods: list[dict],
+    apply: bool = False,
+    report_path: Path | str | None = None,
 ) -> [int, str]:
     """Delete or simulate deletion of unwatched media, return deleted count and
     log file path which can be used to revert the operation using the mass_untrash script.
@@ -143,6 +208,7 @@ def delete_unwatched_vods(
     """
     trashed_media_count = 0
     trashed_files_log_path = None
+    report_rows = []
     media_size = get_total_size(vods)
     if media_size:
         media_to_delete_count = len(vods)
@@ -177,8 +243,34 @@ def delete_unwatched_vods(
             print(
                 f'Trashing these VODs would have freed up to {get_human_readable_size(media_size)}'
             )
+
+        for vod in vods:
+            oid = vod['object_id']
+            api_status = deleted_statuses.get(oid, {}) if apply else {}
+            success = api_status.get('status') == 200
+            if not apply:
+                status = 'would be trashed (dry run)'
+            elif success:
+                status = 'trashed'
+            else:
+                status = 'failed'
+            size = vod.get('storage_used', 0)
+            report_rows.append(
+                {
+                    'action': 'trash VOD',
+                    'status': status,
+                    'oid': oid,
+                    'title': vod.get('title', ''),
+                    'resource_path': '',
+                    'size_bytes': size,
+                    'size': get_human_readable_size(size),
+                    'error': api_status.get('message', '') if apply else '',
+                }
+            )
     else:
         print('No VOD to trash')
+    if report_path is not None:
+        write_report(report_path, report_rows)
     return trashed_media_count, trashed_files_log_path
 
 
@@ -215,8 +307,18 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '--apply',
-        help='Whether to apply changes or not',
+        help=(
+            'Apply changes. Without this flag the script runs in dry-run mode '
+            'and still writes a report.'
+        ),
         action='store_true',
+    )
+
+    parser.add_argument(
+        '--report',
+        help='Path of the CSV report to write.',
+        default=f"cleanup_unwatched_media_report_{time.strftime('%Y%m%d-%H%M%S')}.csv",
+        type=Path,
     )
 
     parser.add_argument(
@@ -253,7 +355,7 @@ if __name__ == '__main__':
 
     action = args.action
     if action == 'reduce_size':
-        delete_hls_resources(ngc, vods, apply=args.apply)
+        delete_hls_resources(ngc, vods, apply=args.apply, report_path=args.report)
     elif action == 'trash':
         yesno = input(
             "WARNING: TRIPLE CHECK THAT YOUR PLATFORM HAS THE TRASH ENABLED "
@@ -261,4 +363,4 @@ if __name__ == '__main__':
         )
         if yesno.lower() != 'yes':
             sys.exit()
-        delete_unwatched_vods(ngc, vods, apply=args.apply)
+        delete_unwatched_vods(ngc, vods, apply=args.apply, report_path=args.report)

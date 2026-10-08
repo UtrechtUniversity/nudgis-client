@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import csv
 import os
 
 import pytest
@@ -27,7 +28,7 @@ def api_client(unwatched_tree, all_resources):
             else:
                 return {'success': False}
 
-    from nudgisclient import NudgisClient
+    from nudgisclient.client import NudgisClient
 
     client = NudgisClient()
     client.api = mock_api_call
@@ -119,7 +120,7 @@ def test_query_deletable_unwatched_vods(api_client):
     assert set(vod['object_id'] for vod in vods) == {'v1234local', 'v1234object'}
 
 
-def test_cleanup_hls_resources(api_client):
+def test_cleanup_hls_resources(api_client, tmp_path):
     vods = e.query_deletable_unwatched_vods(api_client, {})
 
     hls_resources, hls_size = e.get_hls_resources(vods)
@@ -132,11 +133,22 @@ def test_cleanup_hls_resources(api_client):
             assert path.endswith('.m3u8')
     assert total_resources == 3
 
-    assert e.delete_hls_resources(api_client, vods, apply=False) == 0
+    report_path = tmp_path / 'hls-dry-run.csv'
+    assert e.delete_hls_resources(
+        api_client, vods, apply=False, report_path=report_path
+    ) == 0
+    with report_path.open(newline='', encoding='utf-8') as report_file:
+        rows = list(csv.DictReader(report_file))
+    assert len(rows) == 3
+    assert {row['action'] for row in rows} == {'delete HLS resource'}
+    assert {row['status'] for row in rows} == {'would be deleted (dry run)'}
+    assert {row['oid'] for row in rows} == {'v1234local', 'v1234object'}
+    assert sum(int(row['size_bytes']) for row in rows) == 2500
+
     assert e.delete_hls_resources(api_client, vods, apply=True) == 3
 
 
-def test_cleanup_to_trash(api_client):
+def test_cleanup_to_trash(api_client, tmp_path):
     vods = e.query_deletable_unwatched_vods(api_client, {})
 
     total_size = e.get_total_size(vods)
@@ -145,16 +157,27 @@ def test_cleanup_to_trash(api_client):
     oids = e.get_oids(vods)
     assert set(oids) == {'v1234local', 'v1234object'}
 
+    report_path = tmp_path / 'trash-dry-run.csv'
     trashed_media_count, trashed_files_log_path = e.delete_unwatched_vods(
-        api_client, vods, apply=False
+        api_client, vods, apply=False, report_path=report_path
     )
     assert trashed_media_count == 0
     assert trashed_files_log_path is None
+    with report_path.open(newline='', encoding='utf-8') as report_file:
+        rows = list(csv.DictReader(report_file))
+    assert len(rows) == 2
+    assert {row['action'] for row in rows} == {'trash VOD'}
+    assert {row['status'] for row in rows} == {'would be trashed (dry run)'}
+    assert sum(int(row['size_bytes']) for row in rows) == 3000000
 
+    report_path = tmp_path / 'trash-applied.csv'
     trashed_media_count, trashed_files_log_path = e.delete_unwatched_vods(
-        api_client, vods, apply=True
+        api_client, vods, apply=True, report_path=report_path
     )
     assert trashed_media_count == 2
+    with report_path.open(newline='', encoding='utf-8') as report_file:
+        rows = list(csv.DictReader(report_file))
+    assert {row['status'] for row in rows} == {'trashed'}
     with open(trashed_files_log_path, 'r') as f:
         d = f.read().strip()
         lines = d.split('\n')

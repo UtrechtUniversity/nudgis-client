@@ -30,10 +30,15 @@ report.xml
 .claude
 
 # Configuration files
-conf-*.json
+*.json
+!config.example.json
 
 # Backups & downloads
 backups
 temp
 *.csv
 *.log
+
+# Local text and HTML reports
+*.txt
+*.html

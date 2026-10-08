@@ -1,0 +1,49 @@
+
+
+?? Media Deletion Notification ??
+
+Beste collega,
+Op het UU-videoplatform (video.uu.nl) heb je beeldmateriaal staan dat weinig tot niet meer wordt bekeken. Dit materiaal is geselecteerd voor automatische verwijdering. Onder aan deze e-mail vind je een overzicht van de betreffende opnames.
+
+Wat moet je doen?
+We vragen je om te controleren of het beeldmateriaal verwijderd kan worden, of dat je het wilt behouden. Wil je de opnames behouden? Volg dan de instructies in de handleiding om het materiaal te bewaren. Als je geen actie onderneemt, wordt het beeldmateriaal over ongeveer 60 dagen automatisch naar de prullenbak verplaatst.
+
+Bewaartermijn
+Meer informatie over de bewaartermijnen en de achtergrond van dit beleid kun je vinden op de intranetpagina van het videoplatform: https://intranet.uu.nl/kennisbank/het-uu-videoplatform.
+
+Hulp nodig of overleg?
+Heb je hulp nodig of wil je overleggen wat de beste aanpak is? Neem dan contact op met de key-user van het videoplatform binnen jouw afdeling. Hij of zij kan je verder helpen en adviseren over de vervolgstappen.
+
+De volgende {media_count} mediabestanden (totaal {media_size_pp}) gehost op het videoplatform {platform_hostname} dienen volgens het beleid van de Universiteit te worden verwijderd. Je hebt tot {delete_date} de tijd om elk bestand hieronder te beoordelen en de categorie "{skip_categories}" in te stellen als je deze inhoud wilt behouden. Na deze datum zal het materiaal worden verwijderd. Je kunt het bestand ook verwijderen wanneer je het beoordeelt.
+
+Overzicht van te beoordelen media zie onderaan de e-mail
+
+Met vriendelijke groet,
+UU-Videoplatform
+Universiteit Utrecht
+
+---
+
+Dear colleague,
+You have video content on the UU Video Platform (video.uu.nl) that is rarely or no longer viewed. This content has been selected for automatic deletion. At the bottom of this email, you will find a list of the recordings concerned.
+
+What do you need to do?
+We ask that you check whether the video content can be deleted or if you would like to keep it. Want to keep the recordings? Follow the instructions in the manual to preserve the material. If no action is taken, the video content will be automatically moved to the recycle bin in approximately 60 days.
+
+Retention periods
+You can find more information about the retention periods and the rationale behind this policy on the intranet page of the video platform: https://intranet.uu.nl/en/knowledgebase/the-uu-video-platform.
+
+Need help or want to discuss?
+If you need help or want to discuss the best course of action, please get in touch with your key-user for the video platform within your department. They can assist you further and advise on the next steps.
+
+The following {media_count} media files (total {media_size_pp}) hosted on the video platform {platform_hostname} are scheduled for deletion according to University policy. You have until {delete_date} to review each file below and set the category "{skip_categories}" if you wish to retain this content. After this date, the material will be deleted. You may also delete the file when reviewing it.
+
+Kind regards,
+UU Video Platform
+Utrecht University
+
+Overview of media to review
+{list_of_media}
+
+---
+Dit is een automatisch gegenereerd bericht. Gelieve niet te antwoorden. / This is an automatically generated message. Please do not reply.

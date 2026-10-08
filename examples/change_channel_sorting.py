@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 This script will go over all channels and apply a different sorting to a specific value
 """
@@ -8,7 +9,7 @@ import sys
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
 
@@ -38,6 +39,12 @@ if __name__ == '__main__':
         required=True,
     )
 
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
+    )
+
     args = parser.parse_args()
     ngc = NudgisClient(args.conf)
     # ping
@@ -46,5 +53,7 @@ if __name__ == '__main__':
     channels_count = len(all_channels)
     for index, channel in enumerate(all_channels):
         oid = channel['oid']
-        print(f'Applying sorting on channel {oid} {index + 1}/{channels_count}')
-        ngc.api('/channels/edit/', method='post', data={'oid': oid, 'sorting': args.sorting})
+        prefix = '' if args.apply else '[DRY RUN] '
+        print(f'{prefix}Applying sorting on channel {oid} {index + 1}/{channels_count}')
+        if args.apply:
+            ngc.api('/channels/edit/', method='post', data={'oid': oid, 'sorting': args.sorting})

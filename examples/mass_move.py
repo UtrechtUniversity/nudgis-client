@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Example script that mass moves media into a channel based on a criteria (e.g. here a specific external_ref prefix)
 """
@@ -8,7 +9,7 @@ import sys
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nudgisclient import NudgisClient
+    from nudgisclient.client import NudgisClient
 
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
@@ -17,6 +18,11 @@ if __name__ == '__main__':
         help='The configuration to use.',
         nargs='?',
         type=str,
+    )
+    parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply changes. Without this flag the script runs as a dry run and makes no API calls.',
     )
     args = parser.parse_args()
 
@@ -41,7 +47,12 @@ if __name__ == '__main__':
             external_ref = ngc.api('medias/get/', params={'oid': oid, 'full': 'yes'})['info'].get('external_ref')
             if external_ref:
                 if external_ref.startswith(external_ref_prefix) and item['parent_oid'] != target_channel_oid:
-                    print(f'Moving {oid} into {target_channel_oid}')
-                    ngc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
+                    prefix = '' if args.apply else '[DRY RUN] '
+                    print(f'{prefix}Moving {oid} into {target_channel_oid}')
+                    if args.apply:
+                        ngc.api(
+                            'medias/edit/', method='post',
+                            data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'},
+                        )
         start = response['max_date']
         more = response['more']
