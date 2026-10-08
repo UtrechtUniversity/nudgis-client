@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''
+"""
 Example script that mass moves media into a channel based on a criteria (e.g. here a specific external_ref prefix)
-'''
+"""
 import argparse
 import os
 import sys
-
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,6 +50,9 @@ if __name__ == '__main__':
                     prefix = '' if args.apply else '[DRY RUN] '
                     print(f'{prefix}Moving {oid} into {target_channel_oid}')
                     if args.apply:
-                        ngc.api('medias/edit/', method='post', data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'})
+                        ngc.api(
+                            'medias/edit/', method='post',
+                            data={'oid': oid, 'channel': f'mscid-{target_channel_oid}'},
+                        )
         start = response['max_date']
         more = response['more']

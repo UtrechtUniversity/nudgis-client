@@ -23,45 +23,45 @@ except ModuleNotFoundError:
 
 
 REPORT_FIELDS = [
-    "action",
-    "status",
-    "oid",
-    "title",
-    "resource_path",
-    "size_bytes",
-    "size",
-    "error",
+    'action',
+    'status',
+    'oid',
+    'title',
+    'resource_path',
+    'size_bytes',
+    'size',
+    'error',
 ]
 
 
 def write_report(report_path: Path | str, rows: list[dict]) -> None:
     """Write an audit report, including its header when there are no actions."""
-    with open(report_path, "w", newline="", encoding="utf-8") as report_file:
+    with open(report_path, 'w', newline='', encoding='utf-8') as report_file:
         writer = csv.DictWriter(report_file, fieldnames=REPORT_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Report written to: {report_path}")
+    print(f'Report written to: {report_path}')
 
 
-def get_human_readable_size(num: int, suffix: str = "B") -> str:
+def get_human_readable_size(num: int, suffix: str = 'B') -> str:
     """Return human-readable size with automatic suffix"""
-    for unit in ("", "K", "M", "G", "T", "P"):
+    for unit in ('', 'K', 'M', 'G', 'T', 'P'):
         if abs(num) < 1000:
-            return f"{num:3.1f}{unit}{suffix}"
+            return f'{num:3.1f}{unit}{suffix}'
         num /= 1000
-    return f"{num:.1f}Y{suffix}"
+    return f'{num:.1f}Y{suffix}'
 
 
 def filter_vod(media_list: list[dict]) -> list[dict]:
     """Filter list of dictionaries representing media that are VOD by looking at the oid"""
-    return [v for v in media_list if v["object_id"][0] == "v"]
+    return [v for v in media_list if v['object_id'][0] == 'v']
 
 
 def media_is_deletable(resources: list[dict]) -> bool:
     """Determine if a media is deletable, i.e. if it uses a local or object storage manager"""
     for resource_obj in resources:
-        manager = resource_obj.get("manager") or dict()
-        if manager.get("service") in ["local", "object"]:
+        manager = resource_obj.get('manager') or dict()
+        if manager.get('service') in ['local', 'object']:
             return True
 
 
@@ -69,20 +69,20 @@ def query_deletable_unwatched_vods(ngc: NudgisClient, params: dict) -> list[dict
     """Use API to get unwatched media between dates, filter on deletable vod media, and
     finally query and insert resources information
     """
-    print(f"Fetching unwatched media with options {params}")
-    r = ngc.api("/stats/unwatched/", params=params)
+    print(f'Fetching unwatched media with options {params}')
+    r = ngc.api('/stats/unwatched/', params=params)
 
     # only look at VOD
-    unwatched_vods = filter_vod(r.get("unwatched", []))
+    unwatched_vods = filter_vod(r.get('unwatched', []))
 
     unwatched_local_media = list()
 
     for index, vod in enumerate(unwatched_vods):
-        print(f"Looking at VOD {index + 1}/{len(unwatched_vods)}", end="\r")
-        oid = vod["object_id"]
-        resources = ngc.api("/medias/resources-list/", params={"oid": oid})["resources"]
+        print(f'Looking at VOD {index + 1}/{len(unwatched_vods)}', end='\r')
+        oid = vod['object_id']
+        resources = ngc.api('/medias/resources-list/', params={'oid': oid})['resources']
         if media_is_deletable(resources):
-            vod["resources"] = resources
+            vod['resources'] = resources
             unwatched_local_media.append(vod)
     print()
 
@@ -96,26 +96,26 @@ def get_total_size(vods: list[dict]) -> int:
     """Compute total size of VODs from list of dicts"""
     total_size = 0
     for vod in vods:
-        total_size += vod["storage_used"]
+        total_size += vod['storage_used']
     return total_size
 
 
 def get_oids(medias: list[dict]) -> list[str]:
     """Produce list of oids from list of dicts"""
-    return [m["object_id"] for m in medias]
+    return [m['object_id'] for m in medias]
 
 
 def get_hls_resources(vods: list[dict]) -> [dict, int]:
     """Return list of hls resources indexed by oid, and total size of hls resources"""
     hls_resources = dict()
     hls_total_size = 0
-    for index, vod in enumerate(vods):
-        oid = vod["object_id"]
-        for resource_obj in vod["resources"]:
-            if resource_obj["format"] == "m3u8":
+    for vod in vods:
+        oid = vod['object_id']
+        for resource_obj in vod['resources']:
+            if resource_obj['format'] == 'm3u8':
                 hls_resources.setdefault(oid, [])
-                hls_resources[oid].append(resource_obj["path"])
-                hls_total_size += resource_obj["file_size"]
+                hls_resources[oid].append(resource_obj['path'])
+                hls_total_size += resource_obj['file_size']
     return hls_resources, hls_total_size
 
 
@@ -129,68 +129,68 @@ def delete_hls_resources(
     hls_resources_to_delete, hls_size = get_hls_resources(vods)
     deleted_resources_count = 0
     report_rows = []
-    vods_by_oid = {vod["object_id"]: vod for vod in vods}
+    vods_by_oid = {vod['object_id']: vod for vod in vods}
     if hls_size:
         print(
-            f"Cleaning up {len(hls_resources_to_delete)} HLS resources will free "
-            f"{get_human_readable_size(hls_size)}"
+            f'Cleaning up {len(hls_resources_to_delete)} HLS resources will free '
+            f'{get_human_readable_size(hls_size)}'
         )
         for oid, files in hls_resources_to_delete.items():
             vod = vods_by_oid[oid]
             resources_by_path = {
-                resource["path"]: resource for resource in vod["resources"]
+                resource['path']: resource for resource in vod['resources']
             }
-            status = "would be deleted (dry run)"
-            error = ""
+            status = 'would be deleted (dry run)'
+            error = ''
             if apply:
-                print(f"Deleting resources of oid {oid}: {files}")
-                params = {"oid": oid, "names": ",".join(files)}
+                print(f'Deleting resources of oid {oid}: {files}')
+                params = {'oid': oid, 'names': ','.join(files)}
                 try:
-                    r = ngc.api("/medias/resources-delete/", method="post", data=params, timeout=180)
+                    r = ngc.api('/medias/resources-delete/', method='post', data=params, timeout=180)
                 except NudgisRequestError as err:
                     if 'read timeout=' in str(err):
                         print(f'The deletion request timed out for "{oid}", this error can be ignored.')
                         deleted_resources_count += len(files)
-                        status = "deletion timed out (assumed deleted)"
+                        status = 'deletion timed out (assumed deleted)'
                     else:
-                        print(f"Error when deleting resources of {oid}: {err}")
-                        status = "failed"
+                        print(f'Error when deleting resources of {oid}: {err}')
+                        status = 'failed'
                         error = str(err).strip()
                 else:
-                    if not r["success"]:
+                    if not r['success']:
                         print(
                             f"Failure when deleting resources of {oid}: "
                             f"{r.get('message', '')}"
                         )
-                        status = "failed"
-                        error = r.get("message", "")
+                        status = 'failed'
+                        error = r.get('message', '')
                     else:
                         deleted_resources_count += len(files)
-                        status = "deleted"
+                        status = 'deleted'
             else:
-                print(f"[Dry Run] Would delete resources of oid {oid}: {files}")
+                print(f'[Dry Run] Would delete resources of oid {oid}: {files}')
             for resource_path in files:
-                resource_size = resources_by_path[resource_path].get("file_size", 0)
+                resource_size = resources_by_path[resource_path].get('file_size', 0)
                 report_rows.append(
                     {
-                        "action": "delete HLS resource",
-                        "status": status,
-                        "oid": oid,
-                        "title": vod.get("title", ""),
-                        "resource_path": resource_path,
-                        "size_bytes": resource_size,
-                        "size": get_human_readable_size(resource_size),
-                        "error": error,
+                        'action': 'delete HLS resource',
+                        'status': status,
+                        'oid': oid,
+                        'title': vod.get('title', ''),
+                        'resource_path': resource_path,
+                        'size_bytes': resource_size,
+                        'size': get_human_readable_size(resource_size),
+                        'error': error,
                     }
                 )
         if apply:
-            print(f"Deleted {deleted_resources_count} resources")
+            print(f'Deleted {deleted_resources_count} resources')
         else:
             print(
-                f"[Dry run] Could have freed up to {get_human_readable_size(hls_size)} by deleting HLS resources"
+                f'[Dry run] Could have freed up to {get_human_readable_size(hls_size)} by deleting HLS resources'
             )
     else:
-        print("No HLS resources to cleanup")
+        print('No HLS resources to cleanup')
     if report_path is not None:
         write_report(report_path, report_rows)
     return deleted_resources_count
@@ -213,125 +213,125 @@ def delete_unwatched_vods(
     if media_size:
         media_to_delete_count = len(vods)
         print(
-            f"Trashing {media_to_delete_count} unwatched VODs will free {get_human_readable_size(media_size)}"
+            f'Trashing {media_to_delete_count} unwatched VODs will free {get_human_readable_size(media_size)}'
         )
         oids = get_oids(vods)
         if apply:
             trashed_files_log_path = f"{time.strftime('%Y%m%d-%H%M%S')}-trashed.csv"
-            print(f"Will put {media_to_delete_count} VODs to trash")
+            print(f'Will put {media_to_delete_count} VODs to trash')
             deleted_statuses = ngc.api(
-                "/catalog/bulk_delete/", method="post", data={"oids": oids}
-            )["statuses"]
+                '/catalog/bulk_delete/', method='post', data={'oids': oids}
+            )['statuses']
 
             trashed_media_count = 0
             for object_id, status in deleted_statuses.items():
-                if status["status"] == 200:
+                if status['status'] == 200:
                     trashed_media_count += 1
                 else:
                     print(
                         f"Media {object_id} could not be deleted: {status.get('message')}"
                     )
 
-            with open(trashed_files_log_path, "w") as f:
-                print(f"Writing list of deleted oids to {trashed_files_log_path}")
-                f.write("\n".join(oids))
+            with open(trashed_files_log_path, 'w') as f:
+                print(f'Writing list of deleted oids to {trashed_files_log_path}')
+                f.write('\n'.join(oids))
             print(
-                f"Trashed {trashed_media_count} VODs, freed up to {get_human_readable_size(media_size)}"
+                f'Trashed {trashed_media_count} VODs, freed up to {get_human_readable_size(media_size)}'
             )
         else:
-            print(f"[Dry Run] Would delete {media_to_delete_count} VODs: {oids}")
+            print(f'[Dry Run] Would delete {media_to_delete_count} VODs: {oids}')
             print(
-                f"Trashing these VODs would have freed up to {get_human_readable_size(media_size)}"
+                f'Trashing these VODs would have freed up to {get_human_readable_size(media_size)}'
             )
 
         for vod in vods:
-            oid = vod["object_id"]
+            oid = vod['object_id']
             api_status = deleted_statuses.get(oid, {}) if apply else {}
-            success = api_status.get("status") == 200
+            success = api_status.get('status') == 200
             if not apply:
-                status = "would be trashed (dry run)"
+                status = 'would be trashed (dry run)'
             elif success:
-                status = "trashed"
+                status = 'trashed'
             else:
-                status = "failed"
-            size = vod.get("storage_used", 0)
+                status = 'failed'
+            size = vod.get('storage_used', 0)
             report_rows.append(
                 {
-                    "action": "trash VOD",
-                    "status": status,
-                    "oid": oid,
-                    "title": vod.get("title", ""),
-                    "resource_path": "",
-                    "size_bytes": size,
-                    "size": get_human_readable_size(size),
-                    "error": api_status.get("message", "") if apply else "",
+                    'action': 'trash VOD',
+                    'status': status,
+                    'oid': oid,
+                    'title': vod.get('title', ''),
+                    'resource_path': '',
+                    'size_bytes': size,
+                    'size': get_human_readable_size(size),
+                    'error': api_status.get('message', '') if apply else '',
                 }
             )
     else:
-        print("No VOD to trash")
+        print('No VOD to trash')
     if report_path is not None:
         write_report(report_path, report_rows)
     return trashed_media_count, trashed_files_log_path
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.strip())
 
     parser.add_argument(
-        "--conf",
-        help="Path to the configuration file (e.g. myconfig.json).",
+        '--conf',
+        help='Path to the configuration file (e.g. myconfig.json).',
         required=True,
         type=str,
     )
 
     parser.add_argument(
-        "--start-date",
-        help="Start date (e.g. 2023-10-25). Both start date and end date must be specified.",
+        '--start-date',
+        help='Start date (e.g. 2023-10-25). Both start date and end date must be specified.',
         type=str,
-        default="2007-10-10",
+        default='2007-10-10',
     )
 
     parser.add_argument(
-        "--end-date",
-        help="End date (e.g. 2023-10-30). Both start date and end date must be specified.",
+        '--end-date',
+        help='End date (e.g. 2023-10-30). Both start date and end date must be specified.',
         type=str,
         required=True,
     )
 
     parser.add_argument(
-        "--action",
-        help="Action to run on unwatched media; note if trash is selected, the oid list will be written into a file",
-        choices=["reduce_size", "trash"],
+        '--action',
+        help='Action to run on unwatched media; note if trash is selected, the oid list will be written into a file',
+        choices=['reduce_size', 'trash'],
         required=True,
     )
 
     parser.add_argument(
-        "--apply",
+        '--apply',
         help=(
-            "Apply changes. Without this flag the script runs in dry-run mode "
-            "and still writes a report."
+            'Apply changes. Without this flag the script runs in dry-run mode '
+            'and still writes a report.'
         ),
-        action="store_true",
+        action='store_true',
     )
 
     parser.add_argument(
-        "--report",
-        help="Path of the CSV report to write.",
+        '--report',
+        help='Path of the CSV report to write.',
         default=f"cleanup_unwatched_media_report_{time.strftime('%Y%m%d-%H%M%S')}.csv",
         type=Path,
     )
 
     parser.add_argument(
-        "--max-views",
-        help="Number of views over the period to consider unwatched",
+        '--max-views',
+        help='Number of views over the period to consider unwatched',
         required=False,
         type=int,
         default=0,
     )
 
     parser.add_argument(
-        "--channel-oid",
-        help="Root channel oid; if unspecified, will process the entire catalog.",
+        '--channel-oid',
+        help='Root channel oid; if unspecified, will process the entire catalog.',
         type=str,
     )
 
@@ -342,25 +342,25 @@ if __name__ == "__main__":
     params = dict()
 
     if args.start_date and args.end_date:
-        params["sd"] = args.start_date
-        params["ed"] = args.end_date
+        params['sd'] = args.start_date
+        params['ed'] = args.end_date
 
     if args.channel_oid:
-        params["oid"] = args.channel_oid
-        params["recursive"] = "yes"
+        params['oid'] = args.channel_oid
+        params['recursive'] = 'yes'
 
-    params["views_threshold"] = args.max_views
+    params['views_threshold'] = args.max_views
 
     vods = query_deletable_unwatched_vods(ngc, params)
 
     action = args.action
-    if action == "reduce_size":
+    if action == 'reduce_size':
         delete_hls_resources(ngc, vods, apply=args.apply, report_path=args.report)
-    elif action == "trash":
+    elif action == 'trash':
         yesno = input(
             "WARNING: TRIPLE CHECK THAT YOUR PLATFORM HAS THE TRASH ENABLED "
             f"here {ngc.conf['SERVER_URL']}/admin/settings/#id_trash_enabled (type 'yes')"
         )
-        if yesno.lower() != "yes":
+        if yesno.lower() != 'yes':
             sys.exit()
         delete_unwatched_vods(ngc, vods, apply=args.apply, report_path=args.report)

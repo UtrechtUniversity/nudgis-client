@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import csv
-import pytest
 import os
+
+import pytest
 
 import examples.cleanup_unwatched_media as e
 
@@ -9,23 +10,23 @@ import examples.cleanup_unwatched_media as e
 @pytest.fixture()
 def api_client(unwatched_tree, all_resources):
     def mock_api_call(url, **kwargs):
-        if url == "/catalog/bulk_delete/":
+        if url == '/catalog/bulk_delete/':
             return {
-                "statuses": {oid: {"status": 200} for oid in kwargs["data"]["oids"]}
+                'statuses': {oid: {'status': 200} for oid in kwargs['data']['oids']}
             }
-        elif url == "/stats/unwatched/":
+        elif url == '/stats/unwatched/':
             return unwatched_tree
-        elif url == "/medias/resources-list/":
-            oid = kwargs["params"]["oid"]
-            return {"resources": all_resources.get(oid, {})}
-        elif url == "/medias/resources-delete/":
-            oid = kwargs["data"]["oid"]
+        elif url == '/medias/resources-list/':
+            oid = kwargs['params']['oid']
+            return {'resources': all_resources.get(oid, {})}
+        elif url == '/medias/resources-delete/':
+            oid = kwargs['data']['oid']
             if oid in all_resources.keys():
                 return {
-                    "success": True,
+                    'success': True,
                 }
             else:
-                return {"success": False}
+                return {'success': False}
 
     from nudgisclient.client import NudgisClient
 
@@ -37,37 +38,37 @@ def api_client(unwatched_tree, all_resources):
 @pytest.fixture()
 def all_resources():
     return {
-        "v1234local": [
+        'v1234local': [
             {
-                "manager": {"service": "local"},
-                "format": "m3u8",
-                "path": "media_1080_RB4YjJhKks.m3u8",
-                "file_size": 1000,
+                'manager': {'service': 'local'},
+                'format': 'm3u8',
+                'path': 'media_1080_RB4YjJhKks.m3u8',
+                'file_size': 1000,
             },
             {
-                "manager": {"service": "local"},
-                "format": "m3u8",
-                "path": "media_720_yKViKrE37V.m3u8",
-                "file_size": 500,
+                'manager': {'service': 'local'},
+                'format': 'm3u8',
+                'path': 'media_720_yKViKrE37V.m3u8',
+                'file_size': 500,
             },
             {
-                "manager": {"service": "local"},
-                "format": "mp4",
-                "path": "media_1080_Gqi7RHDWdv.mp4",
-                "file_size": 1000,
+                'manager': {'service': 'local'},
+                'format': 'mp4',
+                'path': 'media_1080_Gqi7RHDWdv.mp4',
+                'file_size': 1000,
             },
         ],
-        "v1234object": [
+        'v1234object': [
             {
-                "manager": {"service": "object"},
-                "format": "m3u8",
-                "path": "media_1080_RB4YjJhKks.m3u8",
-                "file_size": 1000,
+                'manager': {'service': 'object'},
+                'format': 'm3u8',
+                'path': 'media_1080_RB4YjJhKks.m3u8',
+                'file_size': 1000,
             }
         ],
-        "v1234youtube": [
+        'v1234youtube': [
             {
-                "manager": {"service": "youtube"},
+                'manager': {'service': 'youtube'},
             }
         ],
     }
@@ -76,73 +77,73 @@ def all_resources():
 @pytest.fixture()
 def unwatched_tree():
     return {
-        "success": True,
-        "start_date": "2023-09-10",
-        "end_date": "2023-09-11",
-        "unwatched": [
+        'success': True,
+        'start_date': '2023-09-10',
+        'end_date': '2023-09-11',
+        'unwatched': [
             {
-                "object_id": "v1234local",
-                "storage_used": 2000000,
+                'object_id': 'v1234local',
+                'storage_used': 2000000,
             },
             {
-                "object_id": "v1234object",
-                "storage_used": 1000000,
+                'object_id': 'v1234object',
+                'storage_used': 1000000,
             },
             {
-                "object_id": "v1234youtube",
-                "storage_used": 1000000,
+                'object_id': 'v1234youtube',
+                'storage_used': 1000000,
             },
             {
-                "object_id": "l12665a308e2b1mfwdke",
-                "storage_used": 9970,
+                'object_id': 'l12665a308e2b1mfwdke',
+                'storage_used': 9970,
             },
         ],
     }
 
 
 def test_get_human_readable_size():
-    assert e.get_human_readable_size(1) == "1.0B"
-    assert e.get_human_readable_size(1000) == "1.0KB"
-    assert e.get_human_readable_size(1000000) == "1.0MB"
-    assert e.get_human_readable_size(1000000000) == "1.0GB"
-    assert e.get_human_readable_size(1000000000000) == "1.0TB"
+    assert e.get_human_readable_size(1) == '1.0B'
+    assert e.get_human_readable_size(1000) == '1.0KB'
+    assert e.get_human_readable_size(1000000) == '1.0MB'
+    assert e.get_human_readable_size(1000000000) == '1.0GB'
+    assert e.get_human_readable_size(1000000000000) == '1.0TB'
 
 
 def test_filter_vod(unwatched_tree):
     assert set(
-        vod["object_id"] for vod in e.filter_vod(unwatched_tree["unwatched"])
-    ) == {"v1234local", "v1234object", "v1234youtube"}
+        vod['object_id'] for vod in e.filter_vod(unwatched_tree['unwatched'])
+    ) == {'v1234local', 'v1234object', 'v1234youtube'}
 
 
 def test_query_deletable_unwatched_vods(api_client):
     vods = e.query_deletable_unwatched_vods(api_client, {})
-    assert set(vod["object_id"] for vod in vods) == {"v1234local", "v1234object"}
+    assert set(vod['object_id'] for vod in vods) == {'v1234local', 'v1234object'}
 
 
 def test_cleanup_hls_resources(api_client, tmp_path):
     vods = e.query_deletable_unwatched_vods(api_client, {})
 
     hls_resources, hls_size = e.get_hls_resources(vods)
-    assert set(hls_resources.keys()) == {"v1234local", "v1234object"}
+    assert set(hls_resources.keys()) == {'v1234local', 'v1234object'}
     assert hls_size == 2500
     total_resources = 0
     for h in hls_resources.values():
         total_resources += len(h)
         for path in h:
-            assert path.endswith(".m3u8")
+            assert path.endswith('.m3u8')
     assert total_resources == 3
 
-    report_path = tmp_path / "hls-dry-run.csv"
+    report_path = tmp_path / 'hls-dry-run.csv'
     assert e.delete_hls_resources(
         api_client, vods, apply=False, report_path=report_path
     ) == 0
-    with report_path.open(newline="", encoding="utf-8") as report_file:
+    with report_path.open(newline='', encoding='utf-8') as report_file:
         rows = list(csv.DictReader(report_file))
     assert len(rows) == 3
-    assert {row["action"] for row in rows} == {"delete HLS resource"}
-    assert {row["status"] for row in rows} == {"would be deleted (dry run)"}
-    assert {row["oid"] for row in rows} == {"v1234local", "v1234object"}
-    assert sum(int(row["size_bytes"]) for row in rows) == 2500
+    assert {row['action'] for row in rows} == {'delete HLS resource'}
+    assert {row['status'] for row in rows} == {'would be deleted (dry run)'}
+    assert {row['oid'] for row in rows} == {'v1234local', 'v1234object'}
+    assert sum(int(row['size_bytes']) for row in rows) == 2500
 
     assert e.delete_hls_resources(api_client, vods, apply=True) == 3
 
@@ -154,33 +155,33 @@ def test_cleanup_to_trash(api_client, tmp_path):
     assert total_size == 3000000
 
     oids = e.get_oids(vods)
-    assert set(oids) == {"v1234local", "v1234object"}
+    assert set(oids) == {'v1234local', 'v1234object'}
 
-    report_path = tmp_path / "trash-dry-run.csv"
+    report_path = tmp_path / 'trash-dry-run.csv'
     trashed_media_count, trashed_files_log_path = e.delete_unwatched_vods(
         api_client, vods, apply=False, report_path=report_path
     )
     assert trashed_media_count == 0
     assert trashed_files_log_path is None
-    with report_path.open(newline="", encoding="utf-8") as report_file:
+    with report_path.open(newline='', encoding='utf-8') as report_file:
         rows = list(csv.DictReader(report_file))
     assert len(rows) == 2
-    assert {row["action"] for row in rows} == {"trash VOD"}
-    assert {row["status"] for row in rows} == {"would be trashed (dry run)"}
-    assert sum(int(row["size_bytes"]) for row in rows) == 3000000
+    assert {row['action'] for row in rows} == {'trash VOD'}
+    assert {row['status'] for row in rows} == {'would be trashed (dry run)'}
+    assert sum(int(row['size_bytes']) for row in rows) == 3000000
 
-    report_path = tmp_path / "trash-applied.csv"
+    report_path = tmp_path / 'trash-applied.csv'
     trashed_media_count, trashed_files_log_path = e.delete_unwatched_vods(
         api_client, vods, apply=True, report_path=report_path
     )
     assert trashed_media_count == 2
-    with report_path.open(newline="", encoding="utf-8") as report_file:
+    with report_path.open(newline='', encoding='utf-8') as report_file:
         rows = list(csv.DictReader(report_file))
-    assert {row["status"] for row in rows} == {"trashed"}
-    with open(trashed_files_log_path, "r") as f:
+    assert {row['status'] for row in rows} == {'trashed'}
+    with open(trashed_files_log_path, 'r') as f:
         d = f.read().strip()
-        lines = d.split("\n")
+        lines = d.split('\n')
         assert len(lines) == 2
         for oid in lines:
-            assert oid.startswith("v")
+            assert oid.startswith('v')
     os.unlink(trashed_files_log_path)

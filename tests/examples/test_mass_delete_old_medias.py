@@ -1,23 +1,22 @@
-import csv
-import smtplib
 from collections import namedtuple
+from copy import deepcopy
+import csv
 from datetime import date, timedelta
+import smtplib
 from unittest import mock
 
 import pytest
 
-
 from examples.mass_delete_old_medias import (
-    EMAIL_STATUS_LABELS,
     _generate_email_csv,
     _generate_email_report,
     _generate_media_csv,
     _get_templates,
     _warn_speakers_about_deletion,
     delete_old_medias,
+    EMAIL_STATUS_LABELS,
     MisconfiguredError,
 )
-
 
 TODAY = date.today()
 TOMORROW = TODAY + timedelta(days=1)
@@ -31,8 +30,19 @@ FIVE_YEARS_AGO = TODAY - timedelta(days=365 * 5)
 
 @pytest.fixture(autouse=True)
 def no_prompt():
-    with mock.patch('examples.mass_delete_old_medias.input', return_value='y') as mock_input:
+    def answer(prompt):
+        if 'Select faculties' in prompt:
+            return '0'
+        assert 'Proceed ?' in prompt
+        return 'y'
+
+    with mock.patch('examples.mass_delete_old_medias.input', side_effect=answer) as mock_input:
         yield mock_input
+
+
+@pytest.fixture(autouse=True)
+def temporary_reports(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture()
@@ -41,11 +51,19 @@ def catalog():
         'channels': [
             {
                 'oid': 'channel_1',
+                'title': 'Faculty 1',
+                'parent_oid': None,
                 'managers_emails': 'manager@example.com\n#manager_inactive@example.com\nmanager_invalid@example.com',
+                'managers_emails_raw': (
+                    'manager@example.com\n#manager_inactive@example.com\nmanager_invalid@example.com'
+                ),
             },
             {
                 'oid': 'channel_2',
+                'title': 'Faculty 2',
+                'parent_oid': None,
                 'managers_emails': '',
+                'managers_emails_raw': '',
             },
         ],
         'videos': [
@@ -172,7 +190,7 @@ def api_client(catalog, users):
                 'statuses': {oid: {'status': 200} for oid in kwargs['data']['oids']}
             }
         elif url == 'catalog/get-all/':
-            return catalog
+            return deepcopy(catalog)
         elif url == 'stats/unwatched/':
             return {
                 'success': True,
@@ -592,19 +610,25 @@ def test_delete_old_medias__full_workflow(
         mock_smtp.factory.assert_not_called()
 
     # Check api calls and deleted oids
-    assert api_client.api.call_count == 2 if expected_deleted_oids else 1
-    assert api_client.api.call_args_list[0] == mock.call(
+    catalog_call = mock.call(
         'catalog/get-all/',
         params={'format': 'json'},
         parse_json=True,
         timeout=120
     )
+    expected_calls = [catalog_call, catalog_call]
+    if delete_date > TODAY:
+        expected_calls.extend([
+            mock.call('users/', params={'limit': 500, 'offset': 0}),
+            mock.call('users/', params={'limit': 500, 'offset': 500}),
+        ])
     if expected_deleted_oids:
-        assert api_client.api.call_args_list[1] == mock.call(
+        expected_calls.append(mock.call(
             'catalog/bulk_delete/',
             method='post',
             data=dict(oids=expected_deleted_oids)
-        )
+        ))
+    assert api_client.api.call_args_list == expected_calls
 
 
 @pytest.mark.parametrize(
@@ -642,6 +666,17 @@ def test_delete_old_medias__full_workflow(
             None, None, ['do not delete', 'some_category'],
             1, 5, THREE_YEARS_AGO, TWO_YEARS_AGO,
             [], id='Filter by views eliminates media created after beginning of view period'
+        ),
+        pytest.param(
+            None, None, ['DO NOT DELETE', 'some_category'],
+            0, 5, TWO_YEARS_AGO, ONE_YEAR_AGO,
+            ['three_years_ago_no_speaker', 'three_years_ago_mail_error'],
+            id='Zero views and case-insensitive protected categories',
+        ),
+        pytest.param(
+            None, None, ['do not delete', 'some_category'],
+            0, 5, THREE_YEARS_AGO, TWO_YEARS_AGO,
+            [], id='Zero views still protects newer media',
         ),
     ]
 )
@@ -682,8 +717,14 @@ def test_delete_old_medias__selection_filters(
         parse_json=True,
         timeout=120
     )
+    assert next(api_calls) == mock.call(
+        'catalog/get-all/',
+        params={'format': 'json'},
+        parse_json=True,
+        timeout=120
+    )
 
-    if views_max_count:
+    if views_max_count is not None:
         assert next(api_calls) == mock.call(
             'stats/unwatched/',
             params={
@@ -701,6 +742,7 @@ def test_delete_old_medias__selection_filters(
             method='post',
             data=dict(oids=expected_deleted_oids)
         )
+    assert list(api_calls) == []
 
 
 @pytest.mark.parametrize(
@@ -755,7 +797,7 @@ def test_delete_old_medias__mailing_behaviour(
         f'--delete-date={delete_date.strftime("%Y-%m-%d")}',
         f'--added-after={FOUR_YEARS_AGO.strftime("%Y-%m-%d")}',
         f'--added-before={TWO_YEARS_AGO.strftime("%Y-%m-%d")}',
-        '--skip-category="do not delete"',
+        '--skip-category=do not delete',
         '--fallback-email=fallback@example.com',
         *(('--send-email-on-deletion',) if send_email_on_deletion else ()),
         *(('--fallback-to-channel-manager',) if fallback_to_channel_manager else ()),

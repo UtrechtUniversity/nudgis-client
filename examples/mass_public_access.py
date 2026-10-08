@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''
+"""
 Put all media described by oids in a CSV file (first column) as public
 
-'''
+"""
+import argparse
 import os
 import sys
-import argparse
-
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''
+"""
 Update managers_emails for course channels AND their edition sub-channels,
 based on kanaal_emails.csv.
 
@@ -19,16 +19,15 @@ Sets managers_emails on each matched channel via channels/edit/.
 A report CSV is written with one row per course channel. Edition totals, updates,
 and errors are included as fields on the corresponding course row. Unmatched
 channels are recorded without a new email (no edit API call is made).
-'''
+"""
 import argparse
+from concurrent.futures import as_completed, ThreadPoolExecutor
 import csv
 from datetime import datetime
 import os
 from pathlib import Path
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 
 # Thread-local storage so each worker thread has its own NudgisClient
 # (requests.Session is not safe to share across threads).
@@ -42,7 +41,7 @@ def _get_thread_client(conf_path):
 
 
 def update_channel(ngc, oid, new_email, dry_run):
-    '''Apply the email update to a single channel. Returns error string or None.'''
+    """Apply the email update to a single channel. Returns error string or None."""
     if dry_run:
         return None
     try:
@@ -60,22 +59,22 @@ def update_channel(ngc, oid, new_email, dry_run):
 
 
 def _catalog_email(channel):
-    '''Return the raw managers_emails string from a catalog channel dict.
+    """Return the raw managers_emails string from a catalog channel dict.
     The catalog provides two fields: managers_emails (a resolved list of matched
     user objects) and managers_emails_raw (the plain string as stored via
-    channels/edit/). We compare against the raw value to detect actual changes.'''
+    channels/edit/). We compare against the raw value to detect actual changes."""
     return channel.get('managers_emails_raw') or ''
 
 
 def _process_course_channel(channel, cursus_email, children_of, conf_path, dry_run, server_url, faculty_title):
-    '''
+    """
     Process one course channel and its edition sub-channels in a worker thread.
     Returns (row, course_updated: bool, course_already_correct: bool,
              course_error: bool, editions_updated: int,
              editions_already_correct: int, edition_errors: int).
     One CSV row is produced per course channel; edition counts are included as fields.
     Old emails are read directly from the catalog data already in memory.
-    '''
+    """
     oid = channel['oid']
     title = channel.get('title', '').strip()
     words = title.split()

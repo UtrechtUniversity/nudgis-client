@@ -6,10 +6,9 @@ Mass edit users targeted by email from a CSV file (first column by default)
 This example script disables storage quota, edit the "data" dict to change the effect
 
 '''
+import argparse
 import os
 import sys
-import argparse
-
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

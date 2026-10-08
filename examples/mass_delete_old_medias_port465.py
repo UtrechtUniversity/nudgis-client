@@ -11,8 +11,8 @@ import argparse
 from contextlib import nullcontext
 import csv
 from datetime import date, datetime, timedelta
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import html
 from itertools import zip_longest
 import logging
@@ -31,7 +31,6 @@ except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from nudgisclient.client import NudgisClient
 from nudgisclient.lib.utils import format_bytes, format_timedelta
-
 
 logger = logging.getLogger(__name__)
 DEFAULT_PLAIN_EMAIL_TEMPLATE = (
@@ -89,7 +88,7 @@ class MisconfiguredError(Exception):
 
 
 def _build_channel_to_faculty_map(channels: list[dict]) -> dict[str, str]:
-    '''Map every channel oid to its top-level (faculty) oid by walking parent_oid.'''
+    """Map every channel oid to its top-level (faculty) oid by walking parent_oid."""
     by_oid = {ch['oid']: ch for ch in channels}
     cache: dict[str, str] = {}
 
@@ -164,12 +163,16 @@ def _get_medias(
                 before_date_pp = added_before.strftime('%Y-%m-%d')
                 status = 'skip_added_after'
                 reason = f'added after {before_date_pp}'
-                logger.debug(f'{media_pp} was skipped because it was added after {before_date_pp}.')
+                logger.debug('%s was skipped because it was added after %s.', media_pp, before_date_pp)
             elif added_after and add_date < added_after:
                 after_date_pp = added_after.strftime('%Y-%m-%d')
                 status = 'skip_added_before'
                 reason = f'added before {after_date_pp}'
-                logger.debug(f'{media_pp} was skipped because it was added before {after_date_pp}.')
+                logger.debug('%s was skipped because it was added before %s.', media_pp, after_date_pp)
+            elif views_max_count is not None and add_date >= views_after:
+                status = 'skip_added_after'
+                reason = f'added on or after view period start {views_after:%Y-%m-%d}'
+                logger.debug('%s was skipped because it was %s.', media_pp, reason)
             elif views_max_count is not None and media['oid'] not in unwatched:
                 views_after_pp = views_after.strftime('%Y-%m-%d')
                 views_before_pp = views_before.strftime('%Y-%m-%d')
@@ -179,13 +182,16 @@ def _get_medias(
                     f'between {views_after_pp} and {views_before_pp}'
                 )
                 logger.debug(
-                    f'{media_pp} was skipped because it was viewed more than {views_max_count} '
-                    f'times between {views_after_pp} and {views_before_pp}.'
+                    '%s was skipped because it was viewed more than %s times between %s and %s.',
+                    media_pp,
+                    views_max_count,
+                    views_after_pp,
+                    views_before_pp,
                 )
             elif skip_categories and (common_categories := categories.intersection(skip_categories)):
                 status = 'skip_categories'
                 reason = f'has categories {sorted(common_categories)}'
-                logger.debug(f'{media_pp} was skipped because it has the categories {common_categories}.')
+                logger.debug('%s was skipped because it has the categories %s.', media_pp, common_categories)
             else:
                 status = 'delete'
                 reason = 'selected for deletion'
@@ -207,8 +213,9 @@ def _get_medias(
 
     storage_used = sum(media['storage_used'] for media in selected_medias)
     logger.info(
-        f'Found {len(selected_medias)} medias matching the given filters '
-        f'(size: {format_bytes(storage_used)}).'
+        'Found %s medias matching the given filters (size: %s).',
+        len(selected_medias),
+        format_bytes(storage_used),
     )
     return selected_medias, records, catalog['channels']
 
@@ -434,15 +441,16 @@ def _warn_speakers_about_deletion(
                     smtp.sendmail(smtp_email, recipient, message)
             except smtplib.SMTPException as err:
                 logger.error(
-                    f'Cannot send email to "{recipient}": {err}. '
-                    'Medias will be added to the fallback recipient\'s email.'
+                    'Cannot send email to "%s": %s. Medias will be added to the fallback recipient\'s email.',
+                    recipient,
+                    err,
                 )
                 to_fallback += medias_per_speaker[recipient]
             else:
                 if apply:
-                    logger.debug(f'Sent "{recipient}" an email about {context}.')
+                    logger.debug('Sent "%s" an email about %s.', recipient, context)
                 else:
-                    logger.debug(f'[Dry run] Would have sent "{recipient}" an email about {context}.')
+                    logger.debug('[Dry run] Would have sent "%s" an email about %s.', recipient, context)
                 report_data[recipient] = (context, media_details)
                 sent_count += 1
         if to_fallback:
@@ -462,21 +470,22 @@ def _warn_speakers_about_deletion(
                     smtp.sendmail(smtp_email, fallback_email, fallback_message)
             except Exception as err:
                 logger.error(
-                    f'Mail delivery to fallback email address "{fallback_email}" failed.\n'
-                    f'{fallback_message}'
+                    'Mail delivery to fallback email address "%s" failed.\n%s',
+                    fallback_email,
+                    fallback_message,
                 )
                 raise err
             else:
                 if apply:
-                    logger.debug(f'Sent "{fallback_email}" an email about {context}.')
+                    logger.debug('Sent "%s" an email about %s.', fallback_email, context)
                 else:
-                    logger.debug(f'[Dry run] Would have sent "{fallback_email}" an email about {context}.')
+                    logger.debug('[Dry run] Would have sent "%s" an email about %s.', fallback_email, context)
                 report_data[fallback_email] = (context, media_details)
                 sent_count += 1
         if apply:
-            logger.info(f'Sent {sent_count} emails.')
+            logger.info('Sent %s emails.', sent_count)
         else:
-            logger.info(f'[Dry run] {sent_count} emails would have been sent.')
+            logger.info('[Dry run] %s emails would have been sent.', sent_count)
     return report_data
 
 
@@ -496,26 +505,27 @@ def _delete_medias(ngc: NudgisClient, medias: list[dict], apply: bool = False):
         )
         for oid, result in response['statuses'].items():
             if result['status'] == 200:
-                logger.debug(f'Media {ms_url}{oid} has been deleted.')
+                logger.debug('Media %s%s has been deleted.', ms_url, oid)
                 deleted_count += 1
                 deleted_size += medias[oid]['storage_used']
             else:
                 err = result['message']
                 logger.error(
-                    f'An error occurred while attempting to delete media {ms_url}{oid}. '
-                    f'The media has not been deleted: {err}.'
+                    'An error occurred while attempting to delete media %s%s. The media has not been deleted: %s.',
+                    ms_url,
+                    oid,
+                    err,
                 )
-        logger.info(
-            f'{deleted_count} medias ({format_bytes(deleted_size)}) have been successfully deleted.'
-        )
+        logger.info('%s medias (%s) have been successfully deleted.', deleted_count, format_bytes(deleted_size))
     else:
         for oid, media in medias.items():
-            logger.debug(f'[Dry run] Media {ms_url}{oid} would have been deleted.')
+            logger.debug('[Dry run] Media %s%s would have been deleted.', ms_url, oid)
             deleted_count += 1
             deleted_size += media['storage_used']
         logger.info(
-            f'[Dry run] {deleted_count} medias ({format_bytes(deleted_size)}) '
-            f'would have been have been deleted.'
+            '[Dry run] %s medias (%s) would have been have been deleted.',
+            deleted_count,
+            format_bytes(deleted_size),
         )
 
 
@@ -589,7 +599,7 @@ def _generate_media_report(
     output_path: Path,
     apply: bool,
 ):
-    '''Generate an HTML tree report of every processed media, colour-coded by status.'''
+    """Generate an HTML tree report of every processed media, colour-coded by status."""
     by_oid = {ch['oid']: ch for ch in channels}
     children_by_parent: dict[Optional[str], list[dict]] = {}
     for ch in channels:
@@ -693,7 +703,7 @@ def _generate_media_report(
         f'</body></html>'
     )
     output_path.write_text(doc, encoding='utf-8')
-    logger.info(f'Wrote media report to {output_path}.')
+    logger.info('Wrote media report to %s.', output_path)
 
 
 def _generate_email_report(
@@ -702,7 +712,7 @@ def _generate_email_report(
     output_path: Path,
     apply: bool,
 ):
-    '''Generate an HTML tree report of every email that was (or would be) sent.'''
+    """Generate an HTML tree report of every email that was (or would be) sent."""
     prefix = '' if apply else '[Dry run] '
     generated = datetime.now().strftime('%Y-%m-%d %H:%M')
     items = []
@@ -743,7 +753,7 @@ def _generate_email_report(
         f'</body></html>'
     )
     output_path.write_text(doc, encoding='utf-8')
-    logger.info(f'Wrote email report to {output_path}.')
+    logger.info('Wrote email report to %s.', output_path)
 
 
 def _generate_email_csv(
@@ -751,7 +761,7 @@ def _generate_email_csv(
     channels: list[dict],
     output_path: Path,
 ):
-    '''One row per unique (email, faculty) pair with an aggregate video count.'''
+    """One row per unique (email, faculty) pair with an aggregate video count."""
     channel_to_faculty = _build_channel_to_faculty_map(channels)
     title_by_oid = {ch['oid']: ch.get('title', '') for ch in channels}
 
@@ -783,7 +793,7 @@ def _generate_email_csv(
                 'total_size': format_bytes(row['_total_bytes']),
                 'delete_date': row['delete_date'],
             })
-    logger.info(f'Wrote email CSV ({len(sorted_rows)} rows) to {output_path}.')
+    logger.info('Wrote email CSV (%s rows) to %s.', len(sorted_rows), output_path)
 
 
 def _generate_media_csv(
@@ -792,7 +802,7 @@ def _generate_media_csv(
     server_url: str,
     output_path: Path,
 ):
-    '''Write deletion candidates grouped by faculty, course, and edition.'''
+    """Write deletion candidates grouped by faculty, course, and edition."""
     channels_by_oid = {channel['oid']: channel for channel in channels}
 
     def channel_path(oid: Optional[str]) -> list[dict]:
@@ -850,7 +860,7 @@ def _generate_media_csv(
                 **row,
                 'Medias Deleted': ' | '.join(sorted(row['Medias Deleted'], key=str.casefold)),
             })
-    logger.info(f'Wrote media CSV ({len(sorted_rows)} rows) to {output_path}.')
+    logger.info('Wrote media CSV (%s rows) to %s.', len(sorted_rows), output_path)
 
 
 def delete_old_medias(sys_args):

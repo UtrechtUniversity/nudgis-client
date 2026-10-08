@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-'''
+"""
 Script to list every distinct category string as actually stored on medias.
 
 Categories are plain free-text strings on each media (not a translated enum), so
 they are returned in whatever language they were entered. Use this to confirm the
 exact stored value before passing it to --skip-category in mass_delete_old_medias.py
 (note that matching there is case-insensitive).
-'''
+"""
 
 import argparse
+from collections import Counter
 import os
 import sys
-from collections import Counter
-
 
 if __name__ == '__main__':
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

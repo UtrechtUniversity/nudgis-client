@@ -26,14 +26,14 @@ from __future__ import annotations
 
 import argparse
 import csv
-import logging
-import os
-import re
-import sys
 from dataclasses import dataclass
 from datetime import date
 from itertools import zip_longest
+import logging
+import os
 from pathlib import Path
+import re
+import sys
 from typing import NamedTuple, Optional
 
 try:
@@ -65,7 +65,7 @@ class RemovalRule:
     replacement: Optional[Speaker] = None
 
     def matches(self, speaker: Speaker) -> bool:
-        '''At least 2 of the 3 data points must match (both sides non-empty).'''
+        """At least 2 of the 3 data points must match (both sides non-empty)."""
         matches = 0
         if self.name and speaker.name and self.name.lower() == speaker.name.lower():
             matches += 1
@@ -77,7 +77,7 @@ class RemovalRule:
 
 
 def _read_csv_rows(csv_path: Path) -> tuple[list[str], list[dict]]:
-    '''Read the CSV with encoding fallback (real-world exports are not always UTF-8).'''
+    """Read the CSV with encoding fallback (real-world exports are not always UTF-8)."""
     for encoding in ('utf-8-sig', 'cp1252', 'latin-1'):
         try:
             with csv_path.open('r', newline='', encoding=encoding) as csvfile:
@@ -85,7 +85,7 @@ def _read_csv_rows(csv_path: Path) -> tuple[list[str], list[dict]]:
                 if reader.fieldnames is None:
                     raise ValueError(f'CSV file "{csv_path}" is empty.')
                 rows = list(reader)
-            logger.debug(f'Read CSV with encoding: {encoding}')
+            logger.debug('Read CSV with encoding: %s', encoding)
             return reader.fieldnames, rows
         except UnicodeDecodeError:
             continue
@@ -125,9 +125,12 @@ def _load_rules(csv_path: Path) -> list[RemovalRule]:
             continue
         if provided < 2:
             logger.warning(
-                f'CSV line {line_num} skipped: at least 2 of the 3 data points '
-                f'(name, id, email) are required to match reliably '
-                f'({name=}, id={spk_id!r}, {email=}).'
+                'CSV line %s skipped: at least 2 of the 3 data points (name, id, email) are required to '
+                'match reliably (name=%r, id=%r, email=%r).',
+                line_num,
+                name,
+                spk_id,
+                email,
             )
             continue
         replacement = None
@@ -145,7 +148,7 @@ def _load_rules(csv_path: Path) -> list[RemovalRule]:
 
 
 def _build_channel_to_faculty_map(channels: list[dict]) -> dict[str, str]:
-    '''Map every channel oid to its top-level (faculty) oid by walking parent_oid.'''
+    """Map every channel oid to its top-level (faculty) oid by walking parent_oid."""
     by_oid = {ch['oid']: ch for ch in channels}
     cache: dict[str, str] = {}
 
@@ -170,7 +173,7 @@ def _build_channel_to_faculty_map(channels: list[dict]) -> dict[str, str]:
 
 
 def _parse_media_speakers(media: dict) -> Optional[list[Speaker]]:
-    '''Parse the pipe-separated speaker fields. Returns None if unreliable.'''
+    """Parse the pipe-separated speaker fields. Returns None if unreliable."""
     emails, ids, names = [], [], []
     if media.get('speaker_email'):
         emails = [value.strip() for value in media['speaker_email'].split('|')]
@@ -204,12 +207,12 @@ def _select_faculties(channels: list[dict], personal_channels_title: str) -> Opt
     ]
     if personal_roots:
         for ch in personal_roots:
-            logger.info(f'Personal channels root "{ch["title"]}" [{ch["oid"]}] will be skipped.')
+            logger.info('Personal channels root "%s" [%s] will be skipped.', ch['title'], ch['oid'])
     else:
         logger.warning(
-            f'No top-level channel titled "{personal_channels_title}" was found. '
-            'If personal channels exist under a different title, pass it with '
-            '--personal-channels-title, otherwise they will NOT be auto-skipped.'
+            'No top-level channel titled "%s" was found. If personal channels exist under a different '
+            'title, pass it with --personal-channels-title, otherwise they will NOT be auto-skipped.',
+            personal_channels_title,
         )
     personal_oids = {ch['oid'] for ch in personal_roots}
     faculties = sorted(
@@ -261,10 +264,12 @@ def _remove_speakers(
             speakers = _parse_media_speakers(media)
             if speakers is None:
                 logger.error(
-                    f'Media "{oid}" was ignored because its speakers cannot be '
-                    f'parsed reliably: speaker={media.get("speaker")!r}, '
-                    f'speaker_email={media.get("speaker_email")!r}, '
-                    f'speaker_id={media.get("speaker_id")!r}'
+                    'Media "%s" was ignored because its speakers cannot be parsed reliably: speaker=%r, '
+                    'speaker_email=%r, speaker_id=%r',
+                    oid,
+                    media.get('speaker'),
+                    media.get('speaker_email'),
+                    media.get('speaker_id'),
                 )
                 continue
 
@@ -296,8 +301,10 @@ def _remove_speakers(
                         value = getattr(spk, attr).lower()
                         if value and value in seen:
                             logger.warning(
-                                f'Media "{oid}": duplicate speaker {spk} after '
-                                'replacement, keeping only the first occurrence.'
+                                'Media "%s": duplicate speaker %s after replacement, keeping only the '
+                                'first occurrence.',
+                                oid,
+                                spk,
                             )
                             continue
                         if value:
@@ -317,13 +324,13 @@ def _remove_speakers(
                 })
                 edit_count += 1
                 logger.info(
-                    f'{media_pp}: removed [{removed_pp}]'
-                    + (f', replaced by [{replaced_pp}]' if replacements else '')
+                    '%s: removed [%s]%s', media_pp, removed_pp,
+                    f', replaced by [{replaced_pp}]' if replacements else '',
                 )
             else:
                 logger.info(
-                    f'[Dry run] {media_pp}: would remove [{removed_pp}]'
-                    + (f', would replace by [{replaced_pp}]' if replacements else '')
+                    '[Dry run] %s: would remove [%s]%s', media_pp, removed_pp,
+                    f', would replace by [{replaced_pp}]' if replacements else '',
                 )
 
             faculty = channels.get(faculty_oid, {})
@@ -357,9 +364,8 @@ def _remove_speakers(
 
     mode_pp = 'Applied' if apply else 'Dry run:'
     logger.info(
-        f'{mode_pp} {len(report_rows)} recording(s) affected'
-        + (f', {edit_count} updated' if apply else '')
-        + f'. Report written to "{report_path}".'
+        '%s %s recording(s) affected%s. Report written to "%s".',
+        mode_pp, len(report_rows), f', {edit_count} updated' if apply else '', report_path,
     )
 
 
@@ -416,7 +422,7 @@ def remove_speakers(sys_args):
     logger.setLevel(args.log_level.upper())
 
     rules = _load_rules(args.csv_file)
-    logger.info(f'Loaded {len(rules)} speaker removal rule(s) from "{args.csv_file}".')
+    logger.info('Loaded %s speaker removal rule(s) from "%s".', len(rules), args.csv_file)
 
     ngc = NudgisClient(args.conf)
     ngc.conf['TIMEOUT'] = max(600, ngc.conf['TIMEOUT'])

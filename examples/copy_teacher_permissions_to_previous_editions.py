@@ -33,7 +33,7 @@ the full course name.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed, ThreadPoolExecutor
 import csv
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -109,7 +109,7 @@ class CourseResult:
 
 
 def _natural_sort_key(value: str) -> tuple:
-    '''Return a case-insensitive key which compares digit runs numerically.'''
+    """Return a case-insensitive key which compares digit runs numerically."""
     return tuple(
         (1, int(part)) if part.isdigit() else (0, part.casefold())
         for part in re.split(r'(\d+)', value or '')
@@ -132,7 +132,7 @@ def _edition_sort_key(channel: dict, latest_by: str = 'title') -> tuple:
 
 
 def _split_editions(editions: list[dict], latest_by: str = 'title') -> tuple[dict, list[dict]]:
-    '''Return the most recent edition followed by all older editions.'''
+    """Return the most recent edition followed by all older editions."""
     if not editions:
         raise ValueError('Cannot find a most recent edition in an empty list.')
     ordered = sorted(editions, key=lambda edition: _edition_sort_key(edition, latest_by))
@@ -144,7 +144,7 @@ def _split_source_and_target_editions(
     latest_by: str = 'title',
     source_edition: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    '''Return source editions and the editions which should receive permissions.'''
+    """Return source editions and the editions which should receive permissions."""
     if not source_edition:
         latest, previous = _split_editions(editions, latest_by)
         return [latest], previous
@@ -159,7 +159,7 @@ def _split_source_and_target_editions(
 
 
 def _get_course_code(course: dict, source_editions: list[dict]) -> str:
-    '''Extract the course code from a year-prefixed edition title, with a course-title fallback.'''
+    """Extract the course code from a year-prefixed edition title, with a course-title fallback."""
     for edition in source_editions:
         edition_title = (edition.get('title') or '').strip()
         if re.match(r'^[0-9]{4}(?![0-9])', edition_title):
@@ -176,7 +176,7 @@ def _get_course_code(course: dict, source_editions: list[dict]) -> str:
 
 
 def _permission_is_enabled(value) -> bool:
-    '''Handle both flat for-content values and nested perms/get values.'''
+    """Handle both flat for-content values and nested perms/get values."""
     if isinstance(value, dict):
         value = value.get('val')
     return value is True
@@ -187,7 +187,7 @@ def _has_teacher_permissions(permissions: dict) -> bool:
 
 
 def _select_faculties(channels: list[dict]) -> set[str]:
-    '''Show the faculty menu and return the selected top-level channel oids.'''
+    """Show the faculty menu and return the selected top-level channel oids."""
     by_oid = {channel['oid']: channel for channel in channels}
     faculties = sorted(
         (
@@ -234,7 +234,7 @@ def _get_course_work(
     faculty_oids: set[str],
     source_edition: str | None = None,
 ) -> list[tuple[dict, dict, list[dict]]]:
-    '''Return selected (faculty, course, editions) tuples with at least two editions.'''
+    """Return selected (faculty, course, editions) tuples with at least two editions."""
     children_of: dict[str, list[dict]] = {}
     for channel in channels:
         parent_oid = channel.get('parent_oid')
@@ -270,7 +270,7 @@ def _get_course_work(
 
 
 def _get_thread_client(conf: str) -> NudgisClient:
-    '''Use one client per worker because requests.Session is not thread-safe.'''
+    """Use one client per worker because requests.Session is not thread-safe."""
     if getattr(_thread_local, 'conf', None) != conf:
         _thread_local.ngc = NudgisClient(conf, setup_logging=False)
         _thread_local.conf = conf
@@ -418,7 +418,7 @@ def _process_course_from_conf(
 
 
 def _write_report(results: list[CourseResult], report_path: Path) -> int:
-    '''Write change rows plus one explanatory row for each course without matches.'''
+    """Write change rows plus one explanatory row for each course without matches."""
     rows_by_user_course = {}
     for result in results:
         if result.teachers == 0 and not result.changes:
@@ -456,7 +456,7 @@ def _write_report(results: list[CourseResult], report_path: Path) -> int:
         writer = csv.DictWriter(csvfile, fieldnames=REPORT_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
-    logger.info(f'CSV report written to "{report_path}" ({len(rows)} row(s)).')
+    logger.info('CSV report written to "%s" (%s row(s)).', report_path, len(rows))
     return len(rows)
 
 
@@ -536,8 +536,8 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     if not work:
         if args.source_edition:
             logger.info(
-                f'No selected courses with at least two editions have a '
-                f'{args.source_edition} source edition. Nothing to do.'
+                'No selected courses with at least two editions have a %s source edition. Nothing to do.',
+                args.source_edition,
             )
         else:
             logger.info('No selected courses have at least two editions. Nothing to do.')
@@ -546,13 +546,16 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
 
     if args.source_edition:
         logger.info(
-            f'Found {len(work)} course(s) with {args.source_edition} source editions '
-            'and at least two total editions. Every edition will be a target.'
+            'Found %s course(s) with %s source editions and at least two total editions. Every edition '
+            'will be a target.',
+            len(work),
+            args.source_edition,
         )
     else:
         logger.info(
-            f'Found {len(work)} course(s) with at least two editions. '
-            f'The most recent edition will be selected by {args.latest_by}.'
+            'Found %s course(s) with at least two editions. The most recent edition will be selected by %s.',
+            len(work),
+            args.latest_by,
         )
     if args.apply:
         answer = input(
@@ -610,7 +613,7 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
             else:
                 logger.debug(message)
             for error in result.errors:
-                logger.error(f'{result.course_title}: {error}')
+                logger.error('%s: %s', result.course_title, error)
 
     total_teachers = sum(result.teachers for result in results)
     total_correct = sum(result.already_correct for result in results)
@@ -623,9 +626,13 @@ def copy_teacher_permissions(sys_args: list[str]) -> int:
     else:
         change_summary = f'{total_needed} permission assignment(s) would be updated'
     logger.info(
-        f'Finished: {len(results)} course(s), {total_teachers} teacher assignment(s) '
-        f'found in source editions, {change_summary}, {total_correct} already correct, '
-        f'{total_errors} error(s).'
+        'Finished: %s course(s), %s teacher assignment(s) found in source editions, %s, %s already '
+        'correct, %s error(s).',
+        len(results),
+        total_teachers,
+        change_summary,
+        total_correct,
+        total_errors,
     )
     _write_report(results, args.report)
     return 1 if total_errors else 0

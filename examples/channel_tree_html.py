@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''
+"""
 Script to generate an interactive HTML visualisation of the channel tree structure.
 
 Fetches the full catalog and renders a collapsible tree showing channels,
@@ -11,13 +11,11 @@ To use this script clone MediaServer client, configure it and run this file.
 git clone https://github.com/UbiCastTeam/mediaserver-client
 cd mediaserver-client
 python3 examples/channel_tree_html.py --conf conf.json
-'''
+"""
 
 import argparse
-import os
-import sys
 from pathlib import Path
-
+import sys
 
 HTML_TEMPLATE = '''\
 <!DOCTYPE html>
@@ -263,7 +261,7 @@ HTML_TEMPLATE = '''\
 
 
 def count_media(channel):
-    '''Recursively count videos, lives, photos_groups in a channel subtree.'''
+    """Recursively count videos, lives, photos_groups in a channel subtree."""
     videos = len(channel.get('videos', []))
     lives = len(channel.get('lives', []))
     photos = len(channel.get('photos_groups', []))
@@ -278,13 +276,10 @@ def count_media(channel):
 
 
 def render_channel(channel, server_url, depth=0):
-    '''Recursively render a channel node as HTML list items.'''
+    """Recursively render a channel node as HTML list items."""
     oid = channel.get('oid', '')
     title = channel.get('title', '(untitled)')
     sub_channels = channel.get('channels', [])
-    videos = channel.get('videos', [])
-    lives = channel.get('lives', [])
-    photos = channel.get('photos_groups', [])
 
     # Count all descendants for badge display
     total_sub_channels, total_videos, total_lives, total_photos = count_media(channel)

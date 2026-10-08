@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''
+"""
 Script to transcode and clean all videos from a MediaServer.
 
 This script requires MediaServer >= 8.2.0.
@@ -9,7 +9,7 @@ To use this script clone MediaServer client, configure it and run this file.
 git clone https://github.com/UbiCastTeam/mediaserver-client
 cd mediaserver-client
 python3 examples/transcode_all_videos.py
-'''
+"""
 import argparse
 import json
 import os

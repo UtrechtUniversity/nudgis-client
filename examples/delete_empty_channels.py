@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''
+"""
 Script to delete empty channels from Nudgis.
 
 To use this script clone MediaServer client, configure it and run this file.
@@ -7,13 +7,13 @@ To use this script clone MediaServer client, configure it and run this file.
 git clone https://github.com/UbiCastTeam/mediaserver-client
 cd mediaserver-client
 python3 examples/delete_empty_channels.py --conf conf.json --max-add-date YYYY-MM-DD --exclude channel_oid
-'''
+"""
 
 import argparse
 import csv
 from datetime import date, datetime
-import re
 from pathlib import Path
+import re
 import sys
 
 
@@ -55,7 +55,9 @@ def clean_tree(tree, deleted_oids):
             clean_tree(channel, deleted_oids)
 
 
-def delete_empty_channels(ngc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300):
+def delete_empty_channels(
+    ngc, channel_oid_blacklist, max_date, min_depth, apply=False, faculty_oids=None, tree=None, timeout=300,
+):
     if tree is None:
         tree = ngc.get_catalog(fmt='tree')
     channel_oid_blacklist = list(channel_oid_blacklist)
@@ -218,7 +220,10 @@ def main():
         selected_titles = [faculties[i - 1]['title'] for i in indices]
         print(f'\nProcessing: {", ".join(selected_titles)}')
 
-    report_rows = delete_empty_channels(ngc, args.exclude_oid, max_date, args.min_depth, args.apply, faculty_oids=faculty_oids, tree=tree, timeout=args.timeout)
+    report_rows = delete_empty_channels(
+        ngc, args.exclude_oid, max_date, args.min_depth, args.apply,
+        faculty_oids=faculty_oids, tree=tree, timeout=args.timeout,
+    )
 
     if report_rows:
         faculty_counts = {}
