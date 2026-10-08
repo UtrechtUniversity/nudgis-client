@@ -5,6 +5,11 @@
 
 A python3 reference implementation of an UbiCast Nudgis API client.
 
+This Utrecht University fork includes our media cleanup, reporting, speaker management,
+and course permission scripts. It follows [UbiCast's Nudgis client](https://github.com/UbiCastTeam/nudgis-client).
+The original [MediaServer fork](https://github.com/uumoodle/ubicast-mediaserver-client)
+is retained as a historical reference.
+
 The API documentation is available on each Nudgis portal at [/static/mediaserver/docs/api/index.html](https://ubicast.tv/static/mediaserver/docs/api/index.html).
 
 ## Requirements
@@ -22,17 +27,18 @@ Optional:
 For development, the package can be installed in editable mode to allow changes on it :
 
 ```sh
-git clone https://github.com/UbiCastTeam/nudgis-client.git
+git clone https://github.com/UtrechtUniversity/nudgis-client.git
 cd nudgis-client/
 python3 -m venv .venv
 source .venv/bin/activate  # remember to run this every time you enter the folder and need to restore the environment
 python3 -m pip install --editable .
 ```
 
-If you want to install it system-wide as dependency, the releases are available on pypi:
+PyPI provides the upstream client library:
 ```sh
 pip install nudgis-client
 ```
+Use this repository checkout for the Utrecht University scripts.
 
 ### Windows
 
@@ -77,7 +83,9 @@ Despite the error above, it shows that the installation is complete.
 
 ## Configuration
 
-Copy the provided `config.json.example` file into e.g. `myconfig.json`, edit it with a text editor and fill the URL and API KEY.
+Copy the provided `config.example.json` file into e.g. `myconfig.json`, edit it with a text editor and fill the URL and API KEY.
+Local JSON configurations are ignored by Git; the example configuration remains tracked.
+Keep API keys and SMTP passwords in your local configuration.
 
 * Check it works with:
 
